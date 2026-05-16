@@ -1,0 +1,15 @@
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+offer_service-*.tar
+/tmp/
+/.elixir_ls/
+/priv/plts/*.plt
+/priv/plts/*.plt.hash
+/.env
+/.env.*
+!/.env.example
