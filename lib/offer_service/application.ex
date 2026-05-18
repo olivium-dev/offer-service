@@ -7,8 +7,13 @@ defmodule OfferService.Application do
     children = [
       OfferService.Repo,
       {Phoenix.PubSub, name: OfferService.PubSub},
+      # Oban must start after Repo
+      {Oban, Application.fetch_env!(:offer_service, Oban)},
       {Task.Supervisor, name: OfferService.TaskSupervisor},
       OfferServiceWeb.Telemetry,
+      # PromEx for observability
+      OfferService.PromEx,
+      # Endpoint last — only serve traffic once workers are up
       OfferServiceWeb.Endpoint
     ]
 

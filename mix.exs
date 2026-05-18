@@ -7,18 +7,12 @@ defmodule OfferService.MixProject do
     [
       app: :offer_service,
       version: @version,
-      elixir: "~> 1.16",
+      elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
       test_coverage: [tool: ExCoveralls],
-      preferred_cli_env: [
-        coveralls: :test,
-        "coveralls.detail": :test,
-        "coveralls.json": :test,
-        "coveralls.html": :test
-      ],
       dialyzer: [
         plt_add_apps: [:mix, :ex_unit],
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
@@ -27,7 +21,10 @@ defmodule OfferService.MixProject do
       releases: [
         offer_service: [
           include_executables_for: [:unix],
-          applications: [runtime_tools: :permanent]
+          applications: [runtime_tools: :permanent],
+          # CRITICAL: lets runtime.exs configure Repo url/pool_size without compile-time match
+          validate_compile_env: false,
+          steps: [:assemble, :tar]   # :tar produces a .tar.gz alongside the dir
         ]
       ]
     ]
@@ -40,6 +37,17 @@ defmodule OfferService.MixProject do
     ]
   end
 
+  def cli do
+    [
+      preferred_envs: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.json": :test,
+        "coveralls.html": :test
+      ]
+    ]
+  end
+
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
@@ -47,7 +55,7 @@ defmodule OfferService.MixProject do
     [
       {:phoenix, "~> 1.7.14"},
       {:phoenix_ecto, "~> 4.5"},
-      {:ecto_sql, "~> 3.11"},
+      {:ecto_sql, "~> 3.12"},
       {:postgrex, "~> 0.18"},
       {:phoenix_view, "~> 2.0"},
       {:jason, "~> 1.4"},
@@ -60,6 +68,8 @@ defmodule OfferService.MixProject do
       {:opentelemetry_phoenix, "~> 1.2"},
       {:opentelemetry_ecto, "~> 1.2"},
       {:req, "~> 0.5"},
+      {:prom_ex, "~> 1.11"},
+      {:oban, "~> 2.18"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: :test},

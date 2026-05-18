@@ -1,5 +1,5 @@
-ARG ELIXIR_VERSION=1.16.3
-ARG OTP_VERSION=26.2.5
+ARG ELIXIR_VERSION=1.17.3
+ARG OTP_VERSION=27.1.2
 ARG DEBIAN_VERSION=bookworm-20240612-slim
 
 FROM hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION} AS builder
@@ -45,8 +45,16 @@ USER app
 
 COPY --from=builder --chown=app:app /app/_build/prod/rel/offer_service ./
 
+# migrate-then-start entrypoint
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    '/app/bin/offer_service eval "OfferService.Release.migrate"' \
+    'exec /app/bin/offer_service start' \
+    > /app/bin/server && chmod +x /app/bin/server
+
 EXPOSE 4040
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget --quiet --tries=1 --spider http://localhost:4040/health || exit 1
 
-CMD ["/app/bin/offer_service", "start"]
+CMD ["/app/bin/server"]
