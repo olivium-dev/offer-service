@@ -167,11 +167,19 @@ defmodule OfferService.Auction.AcceptanceTest do
                Auction.accept_offer(request.client_id, request.id, second_offer.id)
     end
 
-    test "returns :offer_not_pending when target offer was already withdrawn" do
+    test "returns :offer_withdrawn (AC4) when target offer was already withdrawn" do
       request = insert_request!()
       offer = insert_offer!(request, %{status: "withdrawn"})
 
-      assert {:error, :offer_not_pending} =
+      assert {:error, :offer_withdrawn} =
+               Auction.accept_offer(request.client_id, request.id, offer.id)
+    end
+
+    test "returns :already_accepted when the same offer is accepted twice" do
+      request = insert_request!()
+      offer = insert_offer!(request, %{status: "accepted"})
+
+      assert {:error, :already_accepted} =
                Auction.accept_offer(request.client_id, request.id, offer.id)
     end
   end

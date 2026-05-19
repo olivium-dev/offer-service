@@ -27,7 +27,7 @@ defmodule OfferService.Auction.Acceptance do
   require Logger
 
   alias Ecto.Multi
-  alias OfferService.Auction.{AcceptanceOtp, Offer, OTP, Request}
+  alias OfferService.Auction.{AcceptanceOtp, AuditLog, Offer, OfferEvent, OTP, Request}
   alias OfferService.Clients.{ChatClient, NotificationClient}
   alias OfferService.Repo
 
@@ -49,6 +49,8 @@ defmodule OfferService.Auction.Acceptance do
           | :forbidden
           | :request_not_open
           | :offer_not_pending
+          | :offer_withdrawn
+          | :already_accepted
           | :concurrent_modification
           | :high_fee_confirmation_required
           | :chat_service_unavailable
@@ -81,8 +83,20 @@ defmodule OfferService.Auction.Acceptance do
         chat_thread_id: thread && thread.thread_id
       })
     end)
+    |> Multi.insert(:audit_accept, fn %{offer: prev, accepted_offer: next} ->
+      OfferEvent.new_changeset(%{
+        offer_id: next.id,
+        request_id: next.request_id,
+        actor_id: actor_id,
+        action: "accept",
+        from_state: prev.status,
+        to_state: next.status,
+        payload: %{"fee_cents" => next.fee_cents},
+        inserted_at: DateTime.utc_now()
+      })
+    end)
     |> Repo.transaction()
-    |> handle_result()
+    |> handle_result(actor_id)
   rescue
     Ecto.StaleEntryError -> {:error, :concurrent_modification}
   end
@@ -112,9 +126,20 @@ defmodule OfferService.Auction.Acceptance do
 
   defp load_target_offer(repo, request_id, offer_id) do
     case repo.get_by(Offer, id: offer_id, request_id: request_id) do
-      nil -> {:error, :not_found}
-      %Offer{status: "pending"} = offer -> {:ok, offer}
-      _ -> {:error, :offer_not_pending}
+      nil ->
+        {:error, :not_found}
+
+      %Offer{status: s} = offer when s in ["pending", "submitted", "edited"] ->
+        {:ok, offer}
+
+      %Offer{status: "withdrawn"} ->
+        {:error, :offer_withdrawn}
+
+      %Offer{status: "accepted"} ->
+        {:error, :already_accepted}
+
+      _ ->
+        {:error, :offer_not_pending}
     end
   end
 
@@ -135,8 +160,8 @@ defmodule OfferService.Auction.Acceptance do
           where:
             o.request_id == ^request_id and
               o.id != ^accepted_offer_id and
-              o.status == "pending",
-          select: %{id: o.id, jeeber_id: o.jeeber_id}
+              o.status in ["pending", "submitted", "edited"],
+          select: %{id: o.id, jeeber_id: o.jeeber_id, status: o.status}
         ),
         set: [status: "rejected", rejected_at: now, updated_at: now],
         inc: [lock_version: 1]
@@ -185,8 +210,9 @@ defmodule OfferService.Auction.Acceptance do
 
   # --- Post-commit ---------------------------------------------------------
 
-  defp handle_result({:ok, ctx}) do
+  defp handle_result({:ok, ctx}, actor_id) do
     %{
+      offer: prev,
       accepted_offer: accepted,
       rejected_offer_ids: rejected,
       otp: %{plaintext: otp_code},
@@ -196,6 +222,36 @@ defmodule OfferService.Auction.Acceptance do
 
     rejected_ids = Enum.map(rejected, & &1.id)
     fan_out_notifications(final_request, accepted, rejected)
+
+    AuditLog.emit_telemetry(%{
+      offer_id: accepted.id,
+      request_id: final_request.id,
+      actor_id: actor_id,
+      action: :accept,
+      from_state: prev.status,
+      to_state: "accepted"
+    })
+
+    Enum.each(rejected, fn %{id: id, jeeber_id: jid, status: from} ->
+      AuditLog.log!(%{
+        offer_id: id,
+        request_id: final_request.id,
+        actor_id: actor_id,
+        action: :reject,
+        from_state: from,
+        to_state: "rejected",
+        payload: %{"sibling_of" => accepted.id}
+      })
+
+      AuditLog.emit_telemetry(%{
+        offer_id: id,
+        request_id: final_request.id,
+        actor_id: jid,
+        action: :reject,
+        from_state: from,
+        to_state: "rejected"
+      })
+    end)
 
     {:ok,
      %{
@@ -207,12 +263,14 @@ defmodule OfferService.Auction.Acceptance do
      }}
   end
 
-  defp handle_result({:error, _step, reason, _changes}) when is_atom(reason), do: {:error, reason}
+  defp handle_result({:error, _step, reason, _changes}, _actor_id) when is_atom(reason),
+    do: {:error, reason}
 
-  defp handle_result({:error, _step, %Ecto.Changeset{}, _changes}),
+  defp handle_result({:error, _step, %Ecto.Changeset{}, _changes}, _actor_id),
     do: {:error, :concurrent_modification}
 
-  defp handle_result({:error, _step, _other, _changes}), do: {:error, :concurrent_modification}
+  defp handle_result({:error, _step, _other, _changes}, _actor_id),
+    do: {:error, :concurrent_modification}
 
   defp fan_out_notifications(request, accepted, rejected) do
     run = fn -> do_fan_out(request, accepted, rejected) end
