@@ -18,6 +18,59 @@ defmodule OfferServiceWeb.FallbackController do
         "Request is no longer accepting offers (state != open)"
       )
 
+  # JEB-49 / AC4 — terminal lifecycle states map to HTTP 410.
+  def call(conn, {:error, :request_expired}),
+    do:
+      render_error(
+        conn,
+        410,
+        "request_expired",
+        "Delivery request expired and is no longer actionable"
+      )
+
+  def call(conn, {:error, :request_cancelled}),
+    do:
+      render_error(
+        conn,
+        410,
+        "request_cancelled",
+        "Delivery request was cancelled and is no longer actionable"
+      )
+
+  # JEB-49 / AC3 — race-loss with winner identity.
+  def call(conn, {:error, {:already_accepted, winner_user_id}}) do
+    body = %{
+      "error" => %{
+        "code" => "already_accepted",
+        "message" => "Request was accepted by another participant",
+        "winner_user_id" => winner_user_id
+      }
+    }
+
+    conn
+    |> Plug.Conn.put_status(409)
+    |> Phoenix.Controller.json(body)
+  end
+
+  # JEB-49 / AC2 — idempotency contract violations.
+  def call(conn, {:error, :idempotency_key_required}),
+    do:
+      render_error(
+        conn,
+        400,
+        "idempotency_key_required",
+        "Idempotency-Key header is required and must be at least 8 chars"
+      )
+
+  def call(conn, {:error, :idempotency_mismatch}),
+    do:
+      render_error(
+        conn,
+        422,
+        "idempotency_mismatch",
+        "The same Idempotency-Key was reused with a divergent payload"
+      )
+
   def call(conn, {:error, :already_submitted}),
     do:
       render_error(

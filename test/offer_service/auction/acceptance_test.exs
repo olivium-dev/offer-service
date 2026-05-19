@@ -154,7 +154,7 @@ defmodule OfferService.Auction.AcceptanceTest do
                Auction.accept_offer(request_a.client_id, request_a.id, offer_on_b.id)
     end
 
-    test "returns :request_not_open when request is already closed" do
+    test "returns {:already_accepted, winner_user_id} when request is already accepted (JEB-49 / AC3)" do
       request = insert_request!()
       offer = insert_offer!(request)
       expect_chat_thread()
@@ -163,8 +163,26 @@ defmodule OfferService.Auction.AcceptanceTest do
 
       second_offer = insert_offer!(request)
 
-      assert {:error, :request_not_open} =
+      assert {:error, {:already_accepted, winner_user_id}} =
                Auction.accept_offer(request.client_id, request.id, second_offer.id)
+
+      assert winner_user_id == offer.jeeber_id
+    end
+
+    test "returns :request_expired (410) when request lifecycle terminal — expired (JEB-49 / AC4)" do
+      request = insert_request!(%{status: "expired"})
+      offer = insert_offer!(request)
+
+      assert {:error, :request_expired} =
+               Auction.accept_offer(request.client_id, request.id, offer.id)
+    end
+
+    test "returns :request_cancelled (410) when request lifecycle terminal — cancelled (JEB-49 / AC4)" do
+      request = insert_request!(%{status: "cancelled"})
+      offer = insert_offer!(request)
+
+      assert {:error, :request_cancelled} =
+               Auction.accept_offer(request.client_id, request.id, offer.id)
     end
 
     test "returns :offer_withdrawn (AC4) when target offer was already withdrawn" do

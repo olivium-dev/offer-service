@@ -18,7 +18,7 @@ defmodule OfferService.Auction do
   internals.
   """
 
-  alias OfferService.Auction.{Acceptance, Edit, Submit, Withdraw}
+  alias OfferService.Auction.{Acceptance, Edit, Idempotency, Submit, Withdraw}
 
   @doc "Submit a brand-new offer for `request_id` on behalf of `actor_id`."
   defdelegate submit_offer(actor_id, request_id, attrs), to: Submit, as: :run
@@ -31,4 +31,24 @@ defmodule OfferService.Auction do
 
   @doc "Accept an offer (called by the Client/gateway). First writer wins."
   defdelegate accept_offer(actor_id, request_id, offer_id, opts \\ []), to: Acceptance, as: :run
+
+  @doc """
+  Accept an offer **idempotently** (JEB-49 / AC2).
+
+  The `idempotency_key` (typically the `Idempotency-Key` HTTP header)
+  scopes the cached response by `(client_id, request_id, key)`. A
+  replay with the same fingerprint returns the previously persisted
+  response without re-running the saga. A replay with the same key
+  but a divergent fingerprint returns `{:error, :idempotency_mismatch}`.
+  """
+  defdelegate accept_offer_idempotent(
+                idempotency_key,
+                actor_id,
+                request_id,
+                offer_id,
+                opts \\ [],
+                serializer \\ &(&1)
+              ),
+              to: Idempotency,
+              as: :run
 end

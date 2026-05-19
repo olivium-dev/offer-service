@@ -69,19 +69,53 @@ defmodule OfferServiceWeb.OfferController do
 
   @doc """
   POST /api/v1/requests/:request_id/offers/:offer_id/accept
-  (Inherited from JEB-47; preserved.)
+
+  JEB-49 (T-BE-013). Atomic auction close:
+
+    * marks the chosen offer `accepted`, all siblings `rejected`;
+    * transitions the parent request to `accepted`;
+    * generates a 4-digit OTP (returned exactly once);
+    * opens a chat thread between Client and winning Jeeber;
+    * fans out push notifications to all parties.
+
+  The `Idempotency-Key` header (case-insensitive) is **mandatory**.
+  Replays with the same key and same payload return the cached
+  response verbatim; replays with the same key and a divergent
+  payload return `422 idempotency_mismatch`.
   """
   @spec accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def accept(conn, %{"request_id" => request_id, "offer_id" => offer_id} = params) do
     opts = [confirm_high_fee: truthy?(params["confirm_high_fee"])]
 
-    with {:ok, request_uuid} <- cast_uuid(request_id),
+    with {:ok, idem_key} <- fetch_idempotency_key(conn),
+         {:ok, request_uuid} <- cast_uuid(request_id),
          {:ok, offer_uuid} <- cast_uuid(offer_id),
-         {:ok, result} <-
-           Auction.accept_offer(conn.assigns.current_user_id, request_uuid, offer_uuid, opts) do
+         {:ok, mode, body} <-
+           Auction.accept_offer_idempotent(
+             idem_key,
+             conn.assigns.current_user_id,
+             request_uuid,
+             offer_uuid,
+             opts,
+             &serialize_accept/1
+           ) do
       conn
+      |> put_resp_header("x-idempotency-replay", to_string(mode == :replay))
       |> put_status(:ok)
-      |> json(serialize_accept(result))
+      |> json(body)
+    end
+  end
+
+  # AC2: accept either `Idempotency-Key` or `idempotency-key` (HTTP is
+  # case-insensitive; Plug normalises but we don't trust upstream).
+  defp fetch_idempotency_key(conn) do
+    header =
+      Plug.Conn.get_req_header(conn, "idempotency-key")
+      |> Enum.find(&(is_binary(&1) and byte_size(String.trim(&1)) >= 8))
+
+    cond do
+      is_binary(header) -> {:ok, String.trim(header)}
+      true -> {:error, :idempotency_key_required}
     end
   end
 
@@ -163,4 +197,5 @@ defmodule OfferServiceWeb.OfferController do
       otp_code: otp_code
     }
   end
+
 end
