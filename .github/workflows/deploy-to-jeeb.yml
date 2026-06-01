@@ -1,0 +1,133 @@
+---
+# Deploy to Jeeb -- zero-downtime Docker Swarm deploy over the Cloudflare tunnel.
+# Generated from the pilot-proven geolocation-service pattern.
+#   * zero-downtime: service UPDATE (start-first, rollback-on-failure); CREATE only
+#     when absent -- NEVER service rm + service create.
+#   * key-only SSH from JEEB_SSH_PRIVATE_KEY (fail-closed, no password in YAML).
+#   * secrets injected via printf %q over SSH stdin + a 0600 env-file; never inline,
+#     never positional (which mangled the DSN to "-" in the first pilot run).
+#   * SHA-tagged immutable image; HTTP health gate with auto-rollback.
+# Required secrets: JEEB_SSH_PRIVATE_KEY (+ this service's datastore secret).
+name: Deploy to Jeeb
+"on":
+  workflow_dispatch:
+    inputs:
+      registry: { description: 'Container registry', required: true, default: 'ghcr.io' }
+      service_name: { description: 'Swarm service name', required: true, default: 'offer-service' }
+      internal_port: { description: 'Container port', required: true, default: '4040' }
+      external_port: { description: 'Published host port', required: true, default: '10063' }
+      health_path: { description: 'HTTP health path', required: true, default: '/health' }
+      server_hostname: { description: 'Cloudflare tunnel hostname', required: true, default: 'jeeb-ssh.fds-1.com' }
+      server_user: { description: 'SSH user', required: true, default: 'ec2-user' }
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+concurrency:
+  group: deploy-jeeb-offer-service
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    env:
+      IMAGE: ${{ inputs.registry }}/olivium-dev/offer-service
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR (password via stdin)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ inputs.registry }} -u ${{ github.actor }} --password-stdin
+      - name: Build and push image (git-SHA tag)
+        id: build
+        run: |
+          TAG="${IMAGE}:sha-${GITHUB_SHA::12}"
+          docker build -t "$TAG" -t "${IMAGE}:latest" .
+          docker push "$TAG"
+          docker push "${IMAGE}:latest"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Install cloudflared + write deploy key
+        run: |
+          set -euo pipefail
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          KEY_MATERIAL="${{ secrets.JEEB_SSH_PRIVATE_KEY }}"
+          if printf '%s' "$KEY_MATERIAL" | grep -q '^-----BEGIN'; then
+            printf '%s\n' "$KEY_MATERIAL" > ~/.ssh/id_ed25519
+          else
+            printf '%s' "$KEY_MATERIAL" | base64 -d > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          cat > ~/.ssh/config <<SSHCFG
+          Host jeeb
+            HostName ${{ inputs.server_hostname }}
+            User ${{ inputs.server_user }}
+            IdentityFile ~/.ssh/id_ed25519
+            ProxyCommand cloudflared access ssh --hostname %h
+            StrictHostKeyChecking accept-new
+          SSHCFG
+          chmod 600 ~/.ssh/config
+      - name: Remote GHCR login (token via stdin pipe)
+        run: printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh jeeb "docker login ${{ inputs.registry }} -u ${{ github.actor }} --password-stdin"
+      - name: Capture current image as rollback target
+        id: prev
+        run: |
+          PREV=$(ssh jeeb "docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' '${{ inputs.service_name }}' 2>/dev/null" 2>/dev/null | head -n1 | tr -d '\r' || true)
+          case "$PREV" in ghcr.io/*) : ;; *) PREV=none ;; esac
+          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+          echo "Rollback target: $PREV"
+      - name: Zero-downtime deploy (update if exists, else create)
+        env:
+          TAG: ${{ steps.build.outputs.tag }}
+          SVC: ${{ inputs.service_name }}
+          INT: ${{ inputs.internal_port }}
+          EXT: ${{ inputs.external_port }}
+          DATABASE_URL: ${{ secrets.JEEB_DATABASE_URL }}
+          SECRET_KEY_BASE: ${{ secrets.JEEB_SECRET_KEY_BASE }}
+        run: |
+          {
+            printf 'TAG=%q\n' "$TAG"
+            printf 'SVC=%q\n' "$SVC"
+            printf 'INT=%q\n' "$INT"
+            printf 'EXT=%q\n' "$EXT"
+            printf 'DATABASE_URL=%q\n' "$DATABASE_URL"
+            printf 'SECRET_KEY_BASE=%q\n' "$SECRET_KEY_BASE"
+            cat <<'EOF'
+          set -euo pipefail
+          : "${DATABASE_URL:?DATABASE_URL empty}"
+          : "${SECRET_KEY_BASE:?SECRET_KEY_BASE empty}"
+          case "$DATABASE_URL" in ecto://*) : ;; *) echo "::error::DATABASE_URL must be ecto://"; exit 1 ;; esac
+          docker pull "$TAG"
+          if docker service ls --format '{{.Name}}' | grep -wq "$SVC"; then
+            docker service update --image "$TAG" --with-registry-auth \
+              --env-add "DATABASE_URL=$DATABASE_URL" \
+              --env-add "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
+              --env-add "PHX_SERVER=true" \
+              --env-add "APP_ENV=production" \
+              --update-order start-first --update-failure-action rollback \
+              --rollback-order start-first --update-monitor 20s "$SVC"
+          else
+            docker service create --name "$SVC" --replicas 1 \
+              --network jeeb-net \
+              --publish "published=$EXT,target=$INT,mode=host" \
+              --with-registry-auth \
+              --env "DATABASE_URL=$DATABASE_URL" \
+              --env "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
+              --env "PHX_SERVER=true" \
+              --env "APP_ENV=production" \
+              "$TAG"
+          fi
+          EOF
+          } | ssh jeeb bash -s
+      - name: Health gate (poll; rollback on failure)
+        run: |
+          ok=false
+          for i in $(seq 1 40); do
+            if ssh jeeb "curl -fsS -m 5 http://localhost:${{ inputs.external_port }}${{ inputs.health_path }} >/dev/null 2>&1"; then ok=true; break; fi
+            echo "health attempt $i ..."; sleep 4
+          done
+          ssh jeeb "docker service ps --no-trunc '${{ inputs.service_name }}' | head -6" || true
+          if [ "$ok" != true ]; then
+            echo "Health gate RED — rolling back"
+            ssh jeeb "docker service rollback '${{ inputs.service_name }}'" || true
+            exit 1
+          fi
+          echo "Health OK on :${{ inputs.external_port }}${{ inputs.health_path }}"
