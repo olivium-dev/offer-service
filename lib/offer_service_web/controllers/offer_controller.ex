@@ -2,39 +2,175 @@ defmodule OfferServiceWeb.OfferController do
   use OfferServiceWeb, :controller
 
   alias OfferService.Auction
+  alias OfferService.Auction.Offer
+
+  @doc """
+  POST /api/v1/requests/:request_id/offers
+
+  Body: `{ "fee_cents": 1500, "eta_minutes": 25, "note": "free text" }`
+
+  201 on success with the serialized offer. Maps:
+
+    * 404 — request does not exist
+    * 409 — request is no longer open ("request_not_open")
+    * 409 — actor already submitted an offer for this request
+    * 422 — payload fails validation
+  """
+  @spec submit(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def submit(conn, %{"request_id" => request_id} = params) do
+    with {:ok, request_uuid} <- cast_uuid(request_id),
+         {:ok, offer} <-
+           Auction.submit_offer(conn.assigns.current_user_id, request_uuid, attrs(params)) do
+      conn
+      |> put_status(:created)
+      |> json(serialize(offer))
+    end
+  end
+
+  @doc """
+  PUT /api/v1/requests/:request_id/offers/:offer_id
+
+  Re-prices / re-ETAs / re-notes an offer. Up to two times; the third call
+  returns 422 `edit_limit_reached`.
+  """
+  @spec edit(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def edit(conn, %{"request_id" => request_id, "offer_id" => offer_id} = params) do
+    with {:ok, request_uuid} <- cast_uuid(request_id),
+         {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, offer} <-
+           Auction.edit_offer(
+             conn.assigns.current_user_id,
+             request_uuid,
+             offer_uuid,
+             attrs(params)
+           ) do
+      conn
+      |> put_status(:ok)
+      |> json(serialize(offer))
+    end
+  end
+
+  @doc """
+  DELETE /api/v1/requests/:request_id/offers/:offer_id
+
+  Marks the offer as withdrawn. After this, accept calls on it return 410.
+  """
+  @spec withdraw(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def withdraw(conn, %{"request_id" => request_id, "offer_id" => offer_id}) do
+    with {:ok, request_uuid} <- cast_uuid(request_id),
+         {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, offer} <-
+           Auction.withdraw_offer(conn.assigns.current_user_id, request_uuid, offer_uuid) do
+      conn
+      |> put_status(:ok)
+      |> json(serialize(offer))
+    end
+  end
 
   @doc """
   POST /api/v1/requests/:request_id/offers/:offer_id/accept
 
-  Body (optional):
-    `{ "confirm_high_fee": true }` — required when the offer fee is above the
-    high-fee threshold (default: 5000 cents / $50).
+  JEB-49 (T-BE-013). Atomic auction close:
 
-  Success response (200): includes the 4-digit OTP. Only the Client (the
-  acceptor) ever sees this; the persisted record stores only its hash.
+    * marks the chosen offer `accepted`, all siblings `rejected`;
+    * transitions the parent request to `accepted`;
+    * generates a 4-digit OTP (returned exactly once);
+    * opens a chat thread between Client and winning Jeeber;
+    * fans out push notifications to all parties.
+
+  The `Idempotency-Key` header (case-insensitive) is **mandatory**.
+  Replays with the same key and same payload return the cached
+  response verbatim; replays with the same key and a divergent
+  payload return `422 idempotency_mismatch`.
   """
   @spec accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def accept(conn, %{"request_id" => request_id, "offer_id" => offer_id} = params) do
     opts = [confirm_high_fee: truthy?(params["confirm_high_fee"])]
 
-    with {:ok, request_uuid} <- Ecto.UUID.cast(request_id),
-         {:ok, offer_uuid} <- Ecto.UUID.cast(offer_id),
-         {:ok, result} <-
-           Auction.accept_offer(conn.assigns.current_user_id, request_uuid, offer_uuid, opts) do
+    with {:ok, idem_key} <- fetch_idempotency_key(conn),
+         {:ok, request_uuid} <- cast_uuid(request_id),
+         {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, mode, body} <-
+           Auction.accept_offer_idempotent(
+             idem_key,
+             conn.assigns.current_user_id,
+             request_uuid,
+             offer_uuid,
+             opts,
+             &serialize_accept/1
+           ) do
       conn
+      |> put_resp_header("x-idempotency-replay", to_string(mode == :replay))
       |> put_status(:ok)
-      |> json(serialize(result))
-    else
-      :error -> {:error, :not_found}
-      {:error, _} = err -> err
+      |> json(body)
     end
   end
+
+  # AC2: accept either `Idempotency-Key` or `idempotency-key` (HTTP is
+  # case-insensitive; Plug normalises but we don't trust upstream).
+  defp fetch_idempotency_key(conn) do
+    header =
+      Plug.Conn.get_req_header(conn, "idempotency-key")
+      |> Enum.find(&(is_binary(&1) and byte_size(String.trim(&1)) >= 8))
+
+    cond do
+      is_binary(header) -> {:ok, String.trim(header)}
+      true -> {:error, :idempotency_key_required}
+    end
+  end
+
+  # --- helpers -------------------------------------------------------------
+
+  defp cast_uuid(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> {:ok, uuid}
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp attrs(params) do
+    %{
+      fee_cents: cast_integer(params["fee_cents"]),
+      eta_minutes: cast_integer(params["eta_minutes"]),
+      note: params["note"]
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp cast_integer(nil), do: nil
+  defp cast_integer(n) when is_integer(n), do: n
+
+  defp cast_integer(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> n
+      _ -> s
+    end
+  end
+
+  defp cast_integer(other), do: other
 
   defp truthy?(true), do: true
   defp truthy?("true"), do: true
   defp truthy?(_), do: false
 
-  defp serialize(%{
+  defp serialize(%Offer{} = offer) do
+    %{
+      id: offer.id,
+      request_id: offer.request_id,
+      jeeber_id: offer.jeeber_id,
+      fee_cents: offer.fee_cents,
+      eta_minutes: offer.eta_minutes,
+      note: offer.note,
+      status: offer.status,
+      edits_count: offer.edits_count,
+      created_at: offer.inserted_at,
+      updated_at: offer.updated_at,
+      withdrawn_at: offer.withdrawn_at
+    }
+  end
+
+  defp serialize_accept(%{
          request: request,
          accepted_offer: offer,
          rejected_offer_ids: rejected_ids,
@@ -61,4 +197,5 @@ defmodule OfferServiceWeb.OfferController do
       otp_code: otp_code
     }
   end
+
 end

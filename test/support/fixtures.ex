@@ -21,7 +21,8 @@ defmodule OfferService.Fixtures do
           jeeber_id: uuid(),
           fee_cents: 1_500,
           eta_minutes: 25,
-          status: "pending"
+          status: "pending",
+          edits_count: 0
         },
         attrs
       )
@@ -30,5 +31,10 @@ defmodule OfferService.Fixtures do
     %Offer{}
     |> Ecto.Changeset.change(attrs)
     |> Repo.insert!()
+  end
+
+  @doc "Insert a freshly-submitted offer in the JEB-48 canonical state."
+  def insert_submitted_offer!(request, attrs \\ %{}) do
+    insert_offer!(request, Map.merge(%{status: "submitted", edits_count: 0}, attrs))
   end
 end

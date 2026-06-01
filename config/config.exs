@@ -19,6 +19,33 @@ config :offer_service,
   high_fee_threshold_cents: 5_000,
   otp_length: 4
 
+# PromEx configuration
+config :offer_service, OfferService.PromEx,
+  disabled: false,
+  manual_metrics_start_delay: :no_delay,
+  drop_metrics_groups: [],
+  grafana: [
+    host: System.get_env("GRAFANA_HOST", "http://localhost:3000"),
+    username: System.get_env("GRAFANA_USERNAME", "admin"),
+    password: System.get_env("GRAFANA_PASSWORD", "admin")
+  ]
+
+# Oban configuration
+config :offer_service, Oban,
+  repo: OfferService.Repo,
+  plugins: [
+    Oban.Plugins.Pruner,
+    {Oban.Plugins.Cron, crontab: [
+      # Example: cleanup old offers every day at 2 AM
+      # {"0 2 * * *", OfferService.Workers.CleanupWorker}
+    ]}
+  ],
+  queues: [
+    default: 10,
+    notifications: 5,
+    analytics: 2
+  ]
+
 config :phoenix, :json_library, Jason
 
 config :logger, :console,
