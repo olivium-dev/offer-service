@@ -82,6 +82,7 @@ jobs:
           EXT: ${{ inputs.external_port }}
           DATABASE_URL: ${{ secrets.JEEB_DATABASE_URL }}
           SECRET_KEY_BASE: ${{ secrets.JEEB_SECRET_KEY_BASE }}
+          INTERNAL_SERVICE_TOKEN: ${{ secrets.JEEB_INTERNAL_SERVICE_TOKEN }}
         run: |
           {
             printf 'TAG=%q\n' "$TAG"
@@ -90,16 +91,21 @@ jobs:
             printf 'EXT=%q\n' "$EXT"
             printf 'DATABASE_URL=%q\n' "$DATABASE_URL"
             printf 'SECRET_KEY_BASE=%q\n' "$SECRET_KEY_BASE"
+            printf 'INTERNAL_SERVICE_TOKEN=%q\n' "$INTERNAL_SERVICE_TOKEN"
             cat <<'EOF'
           set -euo pipefail
           : "${DATABASE_URL:?DATABASE_URL empty}"
           : "${SECRET_KEY_BASE:?SECRET_KEY_BASE empty}"
+          : "${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN empty}"
           case "$DATABASE_URL" in ecto://*) : ;; *) echo "::error::DATABASE_URL must be ecto://"; exit 1 ;; esac
           docker pull "$TAG"
           if docker service ls --format '{{.Name}}' | grep -wq "$SVC"; then
             docker service update --image "$TAG" --with-registry-auth \
               --env-add "DATABASE_URL=$DATABASE_URL" \
               --env-add "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
+              --env-add "CHAT_SERVICE_URL=http://192.168.2.50:10028" \
+              --env-add "NOTIFICATION_SERVICE_URL=http://192.168.2.50:10026" \
+              --env-add "INTERNAL_SERVICE_TOKEN=$INTERNAL_SERVICE_TOKEN" \
               --env-add "PHX_SERVER=true" \
               --env-add "APP_ENV=production" \
               --update-order start-first --update-failure-action rollback \
@@ -111,6 +117,9 @@ jobs:
               --with-registry-auth \
               --env "DATABASE_URL=$DATABASE_URL" \
               --env "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
+              --env "CHAT_SERVICE_URL=http://192.168.2.50:10028" \
+              --env "NOTIFICATION_SERVICE_URL=http://192.168.2.50:10026" \
+              --env "INTERNAL_SERVICE_TOKEN=$INTERNAL_SERVICE_TOKEN" \
               --env "PHX_SERVER=true" \
               --env "APP_ENV=production" \
               "$TAG"
