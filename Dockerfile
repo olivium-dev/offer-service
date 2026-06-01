@@ -1,6 +1,11 @@
 ARG ELIXIR_VERSION=1.17.3
-ARG OTP_VERSION=27.1.2
-ARG DEBIAN_VERSION=bookworm-20240612-slim
+# OTP/DEBIAN bumped 2026-06-01: the prior hexpm combo
+# (27.1.2 / bookworm-20241016-slim) was garbage-collected from Docker Hub
+# ("not found"). 27.3.4.12 / bookworm-20260518-slim is a currently-published
+# hexpm/elixir tag. Runtime debian pinned separately to a live library tag.
+ARG OTP_VERSION=27.3.4.12
+ARG DEBIAN_VERSION=bookworm-20260518-slim
+ARG RUNTIME_DEBIAN_VERSION=bookworm-20251229-slim
 
 FROM hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION} AS builder
 
@@ -27,7 +32,7 @@ RUN mix compile
 COPY config/runtime.exs config/
 RUN mix release
 
-FROM debian:${DEBIAN_VERSION} AS runtime
+FROM debian:${RUNTIME_DEBIAN_VERSION} AS runtime
 
 RUN apt-get update -y && \
     apt-get install -y libstdc++6 openssl libncurses5 locales ca-certificates && \
