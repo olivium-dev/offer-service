@@ -116,7 +116,7 @@ defmodule OfferService.Auction.Acceptance do
       {:error, :concurrent_modification}
   end
 
-  # AC7 — emit `jeeb_offer_accept_total{outcome}` and a structured log.
+  # AC7 — emit `offer_accept_total{outcome}` and a structured log.
   defp emit_accept_outcome(result, request_id, started_at) do
     duration_ms =
       System.convert_time_unit(System.monotonic_time() - started_at, :native, :millisecond)
@@ -142,7 +142,7 @@ defmodule OfferService.Auction.Acceptance do
       Map.merge(%{outcome: outcome, request_id: request_id}, extra)
     )
 
-    Logger.info("jeeb.offer.accepted",
+    Logger.info("offer.accepted",
       request_id: request_id,
       outcome: outcome,
       latency_ms: duration_ms,

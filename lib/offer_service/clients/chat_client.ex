@@ -1,6 +1,6 @@
 defmodule OfferService.Clients.ChatClient do
   @moduledoc """
-  Behaviour for creating a 1:1 chat thread between a Client and a Jeeber for an
+  Behaviour for creating a 1:1 chat thread between a Client and a provider for an
   accepted offer. Implementations are swapped via application config so that
   tests can use a Mox-generated mock.
   """
