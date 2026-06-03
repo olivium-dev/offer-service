@@ -14,10 +14,18 @@ defmodule OfferService.Clients.ChatClient.HTTP do
       }) do
     url = Application.fetch_env!(:offer_service, :chat_service_url) <> "/internal/threads"
 
+    # The provider participant carries the generic `role: "provider"` token.
+    # `legacy_role: "jeeber"` is an additive backward-compat alias so any
+    # consumer still keying on the legacy "jeeber" string keeps working
+    # (chat-service treats `role` as an opaque free-form string, so this is
+    # non-breaking). Emit BOTH tokens.
     body = %{
       request_id: request_id,
       offer_id: offer_id,
-      participants: [%{user_id: client_id, role: "client"}, %{user_id: jeeber_id, role: "jeeber"}]
+      participants: [
+        %{user_id: client_id, role: "client"},
+        %{user_id: jeeber_id, role: "provider", legacy_role: "jeeber"}
+      ]
     }
 
     case Req.post(url, json: body, headers: auth_headers(), receive_timeout: 5_000) do

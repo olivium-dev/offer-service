@@ -26,7 +26,8 @@ defmodule OfferService.PromEx.OfferMetrics do
         unit: {:native, :millisecond}
       ),
 
-      # JEB-49 / AC7 — `jeeb_offer_accept_total{outcome}` counter.
+      # JEB-49 / AC7 — `offer_accept_total{outcome}` counter
+      # (renamed from `jeeb_offer_accept_total`; dashboard-affecting).
       # Outcomes:
       #   :ok                    — saga committed (winner returned)
       #   :replay                — idempotent replay served from cache
@@ -39,7 +40,7 @@ defmodule OfferService.PromEx.OfferMetrics do
       #   :concurrent_modification — race-loser path
       #   :chat_service_unavailable — downstream failure
       counter(
-        [:jeeb, :offer, :accept, :total],
+        [:offer, :accept, :total],
         event_name: [:offer, :accept, :outcome],
         description:
           "JEB-49 — total auction-close attempts, tagged by terminal outcome (success or failure cause).",
@@ -50,7 +51,7 @@ defmodule OfferService.PromEx.OfferMetrics do
 
       # Per-outcome latency distribution for SLO p99 ≤ 800 ms (NFR-1).
       distribution(
-        [:jeeb, :offer, :accept, :duration_ms],
+        [:offer, :accept, :duration_ms],
         event_name: [:offer, :accept, :outcome],
         description: "End-to-end offer-accept latency per outcome (JEB-49 NFR-1).",
         measurement: :duration,
