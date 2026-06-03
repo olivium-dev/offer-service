@@ -21,6 +21,9 @@ defmodule OfferServiceWeb.Router do
   scope "/api/v1", OfferServiceWeb do
     pipe_through [:api, :authenticated]
 
+    post "/requests/:request_id/offers", OfferController, :submit
+    put "/requests/:request_id/offers/:offer_id", OfferController, :edit
+    delete "/requests/:request_id/offers/:offer_id", OfferController, :withdraw
     post "/requests/:request_id/offers/:offer_id/accept", OfferController, :accept
   end
 end
