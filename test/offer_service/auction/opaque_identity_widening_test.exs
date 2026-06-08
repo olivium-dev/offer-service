@@ -98,7 +98,7 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
   end
 
   describe "full submit -> accept saga with non-uuid identities (S07 happy path)" do
-    test "Kamal wins, Rana is superseded, idempotent replay is stable" do
+    test "the CLIENT (Sami) accepts Kamal's offer; Rana is superseded; replay is stable" do
       request = mirror_request!(@sami)
 
       {:ok, kamal_offer} =
@@ -111,9 +111,10 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
 
       key = "idem-" <> Ecto.UUID.generate()
 
-      # Offer-scoped accept by the OFFER-OWNING Jeeber (Kamal), opaque sub.
+      # Offer-scoped accept by the request-owning CLIENT (Sami), opaque sub.
+      # The Client accepts a Jeeber's bid — that is the S07 auction-close rule.
       assert {:ok, :fresh, first} =
-               Auction.accept_offer_by_id(key, @kamal, kamal_offer.id, [], &serialize/1)
+               Auction.accept_offer_by_id(key, @sami, kamal_offer.id, [], &serialize/1)
 
       reloaded = Repo.get!(Request, request.id)
       assert reloaded.status == "accepted"
@@ -121,21 +122,26 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
       assert Repo.get!(Offer, kamal_offer.id).status == "accepted"
 
       # Idempotent replay: same key + same (actor, offer). The idempotency row
-      # (client_id = opaque @kamal) is read back and the saga is NOT re-run —
+      # (client_id = opaque @sami) is read back and the saga is NOT re-run —
       # no second chat-thread expectation is set, so verify_on_exit! would flag
       # a duplicate side effect.
       assert {:ok, :replay, second} =
-               Auction.accept_offer_by_id(key, @kamal, kamal_offer.id, [], &serialize/1)
+               Auction.accept_offer_by_id(key, @sami, kamal_offer.id, [], &serialize/1)
 
       assert first["otp_code"] == second["otp_code"]
       assert first["accepted_offer"]["id"] == second["accepted_offer"]["id"]
     end
 
-    test "ownership guard still rejects a non-owning opaque Jeeber" do
+    test "ownership guard rejects a Jeeber accepting (only the request CLIENT may accept)" do
       request = mirror_request!(@sami)
       {:ok, kamal_offer} = Auction.submit_offer(@kamal, request.id, %{"fee_cents" => 2_000, "eta_minutes" => 20})
 
-      # Rana (opaque sub) does not own Kamal's offer -> 403, saga never entered.
+      # Kamal (the offer's own Jeeber, opaque sub) is NOT the request owner ->
+      # 403, saga never entered. A Jeeber cannot accept its own bid.
+      assert {:error, :forbidden} =
+               Auction.accept_offer_by_id("idem-" <> Ecto.UUID.generate(), @kamal, kamal_offer.id)
+
+      # Likewise any other Jeeber is forbidden.
       assert {:error, :forbidden} =
                Auction.accept_offer_by_id("idem-" <> Ecto.UUID.generate(), @rana, kamal_offer.id)
 

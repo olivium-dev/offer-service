@@ -5,9 +5,13 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
 
   This is the route the Jeeb gateway forwards `POST /offers/{offer_id}/accept`
   to — it carries no request_id, so offer-service resolves it from the offer and
-  authorizes on OFFER ownership. Mirrors the request-scoped controller test
-  conventions (x-user-id auth header, idempotency-key header, Mox-stubbed
-  cross-service clients).
+  authorizes on request-CLIENT ownership (the Client who created the request is
+  the only authorized acceptor; a Jeeber -> 403). Mirrors the request-scoped
+  controller test conventions (x-user-id auth header, idempotency-key header,
+  Mox-stubbed cross-service clients).
+
+  Auth identities use NON-UUID opaque `x-user-id` values (the gateway JWT `sub`,
+  e.g. `s07-sami-client-9558`) to exercise the a3 uuid->text column widening.
   """
   use OfferServiceWeb.ConnCase, async: false
 
@@ -23,15 +27,20 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
     :ok
   end
 
+  defp client_id(who), do: "s07-#{who}-client-" <> Integer.to_string(:rand.uniform(9999))
+  defp jeeber_id(who), do: "s07-#{who}-jeeber-" <> Integer.to_string(:rand.uniform(9999))
+
   describe "POST /api/v1/offers/:offer_id/accept" do
-    test "200 — the offer's Jeeber accepts and gets the serialized accept envelope", %{conn: conn} do
-      request = insert_request!()
-      offer = insert_offer!(request)
+    test "200 — the request CLIENT accepts a Jeeber offer and gets the accept envelope",
+         %{conn: conn} do
+      client = client_id("sami")
+      request = insert_request!(%{client_id: client})
+      offer = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
       expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "thread-os4"}} end)
 
       conn =
         conn
-        |> put_req_header("x-user-id", offer.jeeber_id)
+        |> put_req_header("x-user-id", client)
         |> put_req_header("idempotency-key", "idem-" <> Ecto.UUID.generate())
         |> post("/api/v1/offers/#{offer.id}/accept")
 
@@ -45,15 +54,28 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
       assert ["false"] = Plug.Conn.get_resp_header(conn, "x-idempotency-replay")
     end
 
-    test "403 — a different Jeeber (not the offer owner) is rejected and the saga never runs",
+    test "403 — the offer's OWN Jeeber cannot accept its own bid; the saga never runs",
          %{conn: conn} do
-      request = insert_request!()
-      offer = insert_offer!(request)
+      request = insert_request!(%{client_id: client_id("sami")})
+      offer = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
 
       # No ChatClientMock expectation: a 200 would fail verify_on_exit!.
       conn =
         conn
-        |> put_req_header("x-user-id", uuid())
+        |> put_req_header("x-user-id", offer.jeeber_id)
+        |> put_req_header("idempotency-key", "idem-" <> Ecto.UUID.generate())
+        |> post("/api/v1/offers/#{offer.id}/accept")
+
+      assert json_response(conn, 403)["error"]["code"] == "forbidden"
+    end
+
+    test "403 — a different client (not the request owner) is rejected", %{conn: conn} do
+      request = insert_request!(%{client_id: client_id("sami")})
+      offer = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
+
+      conn =
+        conn
+        |> put_req_header("x-user-id", client_id("intruder"))
         |> put_req_header("idempotency-key", "idem-" <> Ecto.UUID.generate())
         |> post("/api/v1/offers/#{offer.id}/accept")
 
@@ -63,7 +85,7 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
     test "404 — phantom offer id", %{conn: conn} do
       conn =
         conn
-        |> put_req_header("x-user-id", uuid())
+        |> put_req_header("x-user-id", client_id("sami"))
         |> put_req_header("idempotency-key", "idem-" <> Ecto.UUID.generate())
         |> post("/api/v1/offers/#{uuid()}/accept")
 
@@ -80,12 +102,13 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
     end
 
     test "400 — missing Idempotency-Key header", %{conn: conn} do
-      request = insert_request!()
-      offer = insert_offer!(request)
+      client = client_id("sami")
+      request = insert_request!(%{client_id: client})
+      offer = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
 
       conn =
         conn
-        |> put_req_header("x-user-id", offer.jeeber_id)
+        |> put_req_header("x-user-id", client)
         |> post("/api/v1/offers/#{offer.id}/accept")
 
       assert json_response(conn, 400)["error"]["code"] == "idempotency_key_required"

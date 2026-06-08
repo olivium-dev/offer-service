@@ -110,12 +110,12 @@ defmodule OfferServiceWeb.OfferController do
   POST /api/v1/offers/:offer_id/accept (S07 / OS-4, additive).
 
   Offer-scoped accept for the gateway's `POST /offers/{offer_id}/accept` route.
-  The parent request is resolved from the offer; authorization is OFFER
-  ownership (the offer's Jeeber accepts; a different caller -> 403). Delegates to
-  the same idempotent saga as `accept/2`, so every negative
-  (404/403/410/409/422) and the success envelope are produced by the existing
-  domain code — this action only resolves the offer and forwards the
-  `Idempotency-Key`.
+  The parent request is resolved from the offer; authorization is request-CLIENT
+  ownership (the Client who owns the request accepts a Jeeber's bid; any other
+  caller — including the offer's own Jeeber — gets 403). Delegates to the same
+  idempotent saga as `accept/2`, so every negative (404/403/410/409/422) and the
+  success envelope are produced by the existing domain code — this action only
+  resolves the offer and forwards the `Idempotency-Key`.
   """
   @spec accept_by_offer(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def accept_by_offer(conn, %{"offer_id" => offer_id} = params) do
