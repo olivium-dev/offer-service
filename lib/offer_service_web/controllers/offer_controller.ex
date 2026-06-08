@@ -106,6 +106,38 @@ defmodule OfferServiceWeb.OfferController do
     end
   end
 
+  @doc """
+  POST /api/v1/offers/:offer_id/accept (S07 / OS-4, additive).
+
+  Offer-scoped accept for the gateway's `POST /offers/{offer_id}/accept` route.
+  The parent request is resolved from the offer; authorization is OFFER
+  ownership (the offer's Jeeber accepts; a different caller -> 403). Delegates to
+  the same idempotent saga as `accept/2`, so every negative
+  (404/403/410/409/422) and the success envelope are produced by the existing
+  domain code — this action only resolves the offer and forwards the
+  `Idempotency-Key`.
+  """
+  @spec accept_by_offer(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def accept_by_offer(conn, %{"offer_id" => offer_id} = params) do
+    opts = [confirm_high_fee: truthy?(params["confirm_high_fee"])]
+
+    with {:ok, idem_key} <- fetch_idempotency_key(conn),
+         {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, mode, body} <-
+           Auction.accept_offer_by_id(
+             idem_key,
+             conn.assigns.current_user_id,
+             offer_uuid,
+             opts,
+             &serialize_accept/1
+           ) do
+      conn
+      |> put_resp_header("x-idempotency-replay", to_string(mode == :replay))
+      |> put_status(:ok)
+      |> json(body)
+    end
+  end
+
   # AC2: accept either `Idempotency-Key` or `idempotency-key` (HTTP is
   # case-insensitive; Plug normalises but we don't trust upstream).
   defp fetch_idempotency_key(conn) do

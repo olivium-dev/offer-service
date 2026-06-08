@@ -18,7 +18,15 @@ defmodule OfferService.Auction do
   internals.
   """
 
-  alias OfferService.Auction.{Acceptance, Edit, Idempotency, RequestBridge, Submit, Withdraw}
+  alias OfferService.Auction.{
+    AcceptByOffer,
+    Acceptance,
+    Edit,
+    Idempotency,
+    RequestBridge,
+    Submit,
+    Withdraw
+  }
 
   @doc """
   Idempotently mirror a gateway-created delivery request into this service.
@@ -60,5 +68,25 @@ defmodule OfferService.Auction do
                 serializer \\ &(&1)
               ),
               to: Idempotency,
+              as: :run
+
+  @doc """
+  Accept an offer **by its id** (S07 / OS-4, additive).
+
+  Resolves the parent request from the offer, enforces OFFER ownership
+  (`offer.jeeber_id == actor_id`, else `:forbidden`), then runs the existing
+  idempotent accept saga. Lets an offer-scoped caller (the gateway's
+  `POST /offers/{offer_id}/accept`) accept without first knowing the
+  `request_id` and without any gateway-side offer→request bookkeeping. Returns
+  `{:ok, :fresh | :replay, wire}` or `{:error, reason}`.
+  """
+  defdelegate accept_offer_by_id(
+                idempotency_key,
+                actor_id,
+                offer_id,
+                opts \\ [],
+                serializer \\ &(&1)
+              ),
+              to: AcceptByOffer,
               as: :run
 end

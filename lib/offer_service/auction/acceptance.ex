@@ -34,7 +34,7 @@ defmodule OfferService.Auction.Acceptance do
   @type acceptor_id :: Ecto.UUID.t()
   @type request_id :: Ecto.UUID.t()
   @type offer_id :: Ecto.UUID.t()
-  @type opts :: [confirm_high_fee: boolean()]
+  @type opts :: [confirm_high_fee: boolean(), authorize: boolean()]
 
   @type success :: %{
           request: Request.t(),
@@ -62,12 +62,19 @@ defmodule OfferService.Auction.Acceptance do
           {:ok, success()} | {:error, error_reason()}
   def run(actor_id, request_id, offer_id, opts \\ []) do
     confirm_high_fee? = Keyword.get(opts, :confirm_high_fee, false)
+    # `authorize: false` is set ONLY by the offer-scoped accept path
+    # (`POST /api/v1/offers/:offer_id/accept`), where authorization has already
+    # been established by OFFER ownership (`offer.jeeber_id == actor_id`) before
+    # this saga runs. The request-scoped route keeps the default `true` so its
+    # client-ownership guard (`request.client_id == actor_id` => 403) is
+    # unchanged. Lifecycle/race/410/409 logic below is identical in both modes.
+    authorize? = Keyword.get(opts, :authorize, true)
     threshold = Application.get_env(:offer_service, :high_fee_threshold_cents, 5_000)
     started_at = System.monotonic_time()
 
     result =
       Multi.new()
-      |> Multi.run(:request, fn repo, _ -> lock_request(repo, request_id, actor_id) end)
+      |> Multi.run(:request, fn repo, _ -> lock_request(repo, request_id, actor_id, authorize?) end)
       |> Multi.run(:offer, fn repo, %{request: r} -> load_target_offer(repo, r.id, offer_id) end)
       |> Multi.run(:high_fee_guard, fn _repo, %{offer: o} ->
         check_high_fee(o, confirm_high_fee?, threshold)
@@ -152,7 +159,7 @@ defmodule OfferService.Auction.Acceptance do
 
   # --- Multi steps ---------------------------------------------------------
 
-  defp lock_request(repo, request_id, actor_id) do
+  defp lock_request(repo, request_id, actor_id, authorize?) do
     query =
       from r in Request,
         where: r.id == ^request_id,
@@ -162,7 +169,11 @@ defmodule OfferService.Auction.Acceptance do
       nil ->
         {:error, :not_found}
 
-      %Request{client_id: client_id} when client_id != actor_id ->
+      # Client-ownership guard — request-scoped accept only. The offer-scoped
+      # path passes `authorize? == false` because it already authorized on
+      # OFFER ownership before entering the saga; a non-owning Jeeber was
+      # rejected with 403 there, never reaching this transaction.
+      %Request{client_id: client_id} when authorize? and client_id != actor_id ->
         {:error, :forbidden}
 
       %Request{status: "open"} = request ->

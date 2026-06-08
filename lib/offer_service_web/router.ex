@@ -28,5 +28,10 @@ defmodule OfferServiceWeb.Router do
     put "/requests/:request_id/offers/:offer_id", OfferController, :edit
     delete "/requests/:request_id/offers/:offer_id", OfferController, :withdraw
     post "/requests/:request_id/offers/:offer_id/accept", OfferController, :accept
+
+    # S07 / OS-4: offer-scoped accept for the gateway's POST /offers/{id}/accept.
+    # Resolves the request from the offer; offer-owner gated. Additive — the
+    # request-scoped accept route above is unchanged.
+    post "/offers/:offer_id/accept", OfferController, :accept_by_offer
   end
 end
