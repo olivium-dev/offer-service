@@ -202,22 +202,67 @@ defmodule OfferService.Auction.AcceptanceTest do
     end
   end
 
-  describe "accept_offer/4 — atomicity" do
-    test "rolls back the entire transaction if chat-service fails" do
+  describe "accept_offer/4 — chat-thread is non-fatal (S07 fix A)" do
+    # Chat-thread creation is post-commit best-effort: a chat-service outage
+    # must NEVER roll back or 502 the accept. The accept commits with
+    # chat_thread_id=nil; OTP issuance and sibling-reject still happen.
+    test "accept SUCCEEDS with thread_id=nil when chat client returns :chat_service_unavailable" do
       request = insert_request!()
-      target = insert_offer!(request)
-      sibling = insert_offer!(request)
+      target = insert_offer!(request, %{fee_cents: 2_000})
+      sibling = insert_offer!(request, %{fee_cents: 1_800})
 
-      expect(ChatClientMock, :create_thread, fn _ -> {:error, :timeout} end)
+      expect(ChatClientMock, :create_thread, fn _ -> {:error, :chat_service_unavailable} end)
 
-      assert {:error, :chat_service_unavailable} =
+      assert {:ok, result} =
                Auction.accept_offer(request.client_id, request.id, target.id)
 
-      # Nothing should have committed
-      assert Repo.get!(Offer, target.id).status == "pending"
-      assert Repo.get!(Offer, sibling.id).status == "pending"
-      assert Repo.get!(Request, request.id).status == "open"
-      assert Repo.all(AcceptanceOtp) == []
+      # The accept committed in full — only the chat link is absent.
+      assert result.thread_id == nil
+      assert result.request.chat_thread_id == nil
+      assert result.accepted_offer.id == target.id
+      assert MapSet.new(result.rejected_offer_ids) == MapSet.new([sibling.id])
+
+      # OTP was still issued inside the committed transaction.
+      assert is_binary(result.otp_code) and result.otp_code =~ ~r/^\d{4}$/
+      [otp] = Repo.all(AcceptanceOtp)
+      assert otp.offer_id == target.id
+
+      # Sibling supersede + target accept persisted; request is terminal-accepted.
+      assert Repo.get!(Offer, target.id).status == "accepted"
+      assert Repo.get!(Offer, sibling.id).status == "rejected"
+
+      reloaded = Repo.get!(Request, request.id)
+      assert reloaded.status == "accepted"
+      assert reloaded.accepted_offer_id == target.id
+      assert reloaded.chat_thread_id == nil
+    end
+
+    test "accept SUCCEEDS with thread_id=nil when chat client raises (transport crash)" do
+      request = insert_request!()
+      target = insert_offer!(request)
+
+      expect(ChatClientMock, :create_thread, fn _ -> raise "connection refused" end)
+
+      assert {:ok, result} =
+               Auction.accept_offer(request.client_id, request.id, target.id)
+
+      assert result.thread_id == nil
+      assert Repo.get!(Offer, target.id).status == "accepted"
+      assert Repo.get!(Request, request.id).status == "accepted"
+      assert [_otp] = Repo.all(AcceptanceOtp)
+    end
+
+    test "links chat_thread_id on the committed request when chat-service succeeds later" do
+      request = insert_request!()
+      offer = insert_offer!(request)
+
+      expect_chat_thread("thread-linked-xyz")
+
+      assert {:ok, %{thread_id: "thread-linked-xyz"}} =
+               Auction.accept_offer(request.client_id, request.id, offer.id)
+
+      # The post-commit success path back-fills the committed row.
+      assert Repo.get!(Request, request.id).chat_thread_id == "thread-linked-xyz"
     end
   end
 
