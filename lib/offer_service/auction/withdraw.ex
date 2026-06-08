@@ -37,7 +37,8 @@ defmodule OfferService.Auction.Withdraw do
           | :invalid_transition
           | :concurrent_modification
 
-  @spec run(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+  # actor_id is the opaque external Jeeber identity (gateway JWT `sub`), not a uuid.
+  @spec run(actor_id :: binary(), request_id :: Ecto.UUID.t(), offer_id :: Ecto.UUID.t()) ::
           {:ok, Offer.t()} | {:error, error_reason()}
   def run(actor_id, request_id, offer_id)
       when is_binary(actor_id) and is_binary(request_id) and is_binary(offer_id) do

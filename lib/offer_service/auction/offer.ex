@@ -14,7 +14,10 @@ defmodule OfferService.Auction.Offer do
   @statuses ~w(pending submitted edited withdrawn accepted rejected expired)
 
   schema "offers" do
-    field :jeeber_id, :binary_id
+    # External opaque identity — the submitting Jeeber's gateway-forwarded JWT
+    # `sub` (`x-user-id`), NOT a local uuid. Stored as `text`; see migration
+    # 20260520090000_widen_external_identity_columns_to_text.
+    field :jeeber_id, :string
     field :fee_cents, :integer
     field :eta_minutes, :integer
     field :note, :string

@@ -10,7 +10,10 @@ defmodule OfferService.Auction.Request do
   @foreign_key_type :binary_id
 
   schema "requests" do
-    field :client_id, :binary_id
+    # External opaque identity — the gateway-forwarded JWT `sub` (`x-user-id`),
+    # NOT a local uuid. Stored as `text`; see migration
+    # 20260520090000_widen_external_identity_columns_to_text.
+    field :client_id, :string
     field :status, :string, default: "open"
     field :accepted_offer_id, :binary_id
     field :chat_thread_id, :string

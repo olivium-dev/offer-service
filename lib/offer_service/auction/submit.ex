@@ -42,7 +42,8 @@ defmodule OfferService.Auction.Submit do
           | :already_submitted
           | Ecto.Changeset.t()
 
-  @spec run(Ecto.UUID.t(), Ecto.UUID.t(), map()) ::
+  # actor_id is the opaque external Jeeber identity (gateway JWT `sub`), not a uuid.
+  @spec run(actor_id :: binary(), request_id :: Ecto.UUID.t(), map()) ::
           {:ok, Offer.t()} | {:error, error_reason()}
   def run(actor_id, request_id, attrs) when is_binary(actor_id) and is_binary(request_id) do
     initial = StateMachine.initial()

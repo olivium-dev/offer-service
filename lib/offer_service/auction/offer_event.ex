@@ -21,7 +21,10 @@ defmodule OfferService.Auction.OfferEvent do
   @actions ~w(submit edit withdraw accept reject expire)
 
   schema "offer_events" do
-    field :actor_id, :binary_id
+    # External opaque identity — the acting user's gateway-forwarded JWT `sub`
+    # (mirrors `offers.jeeber_id` on submit), NOT a local uuid. Stored as
+    # `text`; see migration 20260520090000_widen_external_identity_columns_to_text.
+    field :actor_id, :string
     field :action, :string
     field :from_state, :string
     field :to_state, :string

@@ -26,6 +26,27 @@ defmodule OfferServiceWeb.RequestControllerTest do
       assert %Request{status: "open"} = Repo.get(Request, id)
     end
 
+    test "201 with a NON-UUID opaque client_id (S07 regression — was 500)", %{conn: conn} do
+      # The gateway forwards the JWT `sub` (e.g. `s07-sami-client`) as client_id;
+      # it is NOT a uuid. Before the uuid->text widening this INSERT raised
+      # Postgres 22P02 and the bridge surfaced a 500. It must now 201.
+      id = Ecto.UUID.generate()
+      opaque_client = "s07-sami-client-9558"
+
+      conn =
+        conn
+        |> put_req_header("x-user-id", opaque_client)
+        |> post("/api/v1/requests", %{"request_id" => id, "client_id" => opaque_client})
+
+      assert %{
+               "id" => ^id,
+               "client_id" => ^opaque_client,
+               "status" => "open"
+             } = json_response(conn, 201)
+
+      assert %Request{client_id: ^opaque_client} = Repo.get(Request, id)
+    end
+
     test "200 on idempotent replay with x-idempotency-replay header", %{conn: conn} do
       id = Ecto.UUID.generate()
       client_id = Ecto.UUID.generate()

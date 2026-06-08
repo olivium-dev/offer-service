@@ -31,7 +31,8 @@ defmodule OfferService.Auction.Acceptance do
   alias OfferService.Clients.{ChatClient, NotificationClient}
   alias OfferService.Repo
 
-  @type acceptor_id :: Ecto.UUID.t()
+  # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
+  @type acceptor_id :: binary()
   @type request_id :: Ecto.UUID.t()
   @type offer_id :: Ecto.UUID.t()
   @type opts :: [confirm_high_fee: boolean(), authorize: boolean()]

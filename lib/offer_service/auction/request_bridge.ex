@@ -41,7 +41,8 @@ defmodule OfferService.Auction.RequestBridge do
 
   @type upsert_attrs :: %{
           required(:id) => Ecto.UUID.t(),
-          required(:client_id) => Ecto.UUID.t(),
+          # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
+          required(:client_id) => binary(),
           optional(:status) => binary()
         }
 
