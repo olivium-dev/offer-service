@@ -52,6 +52,16 @@ defmodule OfferServiceWeb.FallbackController do
     |> Phoenix.Controller.json(body)
   end
 
+  # Request-bridge (POST /api/v1/requests) — caller-supplied id is mandatory.
+  def call(conn, {:error, :request_id_required}),
+    do:
+      render_error(
+        conn,
+        400,
+        "request_id_required",
+        "request_id (or id) is required and must be a valid UUID"
+      )
+
   # JEB-49 / AC2 — idempotency contract violations.
   def call(conn, {:error, :idempotency_key_required}),
     do:
