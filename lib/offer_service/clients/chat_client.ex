@@ -8,8 +8,9 @@ defmodule OfferService.Clients.ChatClient do
   @type thread_params :: %{
           required(:request_id) => Ecto.UUID.t(),
           required(:offer_id) => Ecto.UUID.t(),
-          required(:client_id) => Ecto.UUID.t(),
-          required(:jeeber_id) => Ecto.UUID.t()
+          # Opaque external identities (gateway JWT `sub`), not necessarily uuids.
+          required(:client_id) => binary(),
+          required(:jeeber_id) => binary()
         }
 
   @type thread_result :: %{thread_id: String.t()}

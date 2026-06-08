@@ -6,7 +6,8 @@ defmodule OfferService.Clients.NotificationClient do
   @type event :: :offer_accepted | :offer_rejected | :auction_closed
 
   @type notify_params :: %{
-          required(:user_id) => Ecto.UUID.t(),
+          # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
+          required(:user_id) => binary(),
           required(:event) => event(),
           required(:payload) => map()
         }

@@ -26,7 +26,10 @@ defmodule OfferService.Auction.AcceptanceIdempotencyKey do
 
   schema "acceptance_idempotency_keys" do
     field :idempotency_key, :string
-    field :client_id, :binary_id
+    # External opaque identity — the accepting user's gateway-forwarded JWT
+    # `sub` (`x-user-id`), NOT a local uuid. Stored as `text`; see migration
+    # 20260520090000_widen_external_identity_columns_to_text.
+    field :client_id, :string
     field :request_fingerprint, :string
     field :response, :map
     field :status, :string, default: "succeeded"

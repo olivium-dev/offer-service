@@ -24,7 +24,8 @@ defmodule OfferService.Auction.Idempotency do
   alias OfferService.Auction.{Acceptance, AcceptanceIdempotencyKey}
   alias OfferService.Repo
 
-  @type actor_id :: Ecto.UUID.t()
+  # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
+  @type actor_id :: binary()
   @type request_id :: Ecto.UUID.t()
   @type offer_id :: Ecto.UUID.t()
   @type idem_key :: binary()
