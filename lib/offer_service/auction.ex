@@ -18,7 +18,25 @@ defmodule OfferService.Auction do
   internals.
   """
 
-  alias OfferService.Auction.{Acceptance, Edit, Idempotency, Submit, Withdraw}
+  alias OfferService.Auction.{
+    AcceptByOffer,
+    Acceptance,
+    Edit,
+    Idempotency,
+    RequestBridge,
+    Submit,
+    Withdraw
+  }
+
+  @doc """
+  Idempotently mirror a gateway-created delivery request into this service.
+
+  The gateway is the system-of-record; it forwards the `request_id` it already
+  issued so that subsequent `submit_offer/3` calls can resolve the request row.
+  A replay for an already-mirrored id is a no-op that preserves the request's
+  current lifecycle state. Returns `{:ok, :created | :exists, request}`.
+  """
+  defdelegate upsert_request(attrs), to: RequestBridge, as: :upsert
 
   @doc "Submit a brand-new offer for `request_id` on behalf of `actor_id`."
   defdelegate submit_offer(actor_id, request_id, attrs), to: Submit, as: :run
@@ -50,5 +68,25 @@ defmodule OfferService.Auction do
                 serializer \\ &(&1)
               ),
               to: Idempotency,
+              as: :run
+
+  @doc """
+  Accept an offer **by its id** (S07 / OS-4, additive).
+
+  Resolves the parent request from the offer, enforces OFFER ownership
+  (`offer.jeeber_id == actor_id`, else `:forbidden`), then runs the existing
+  idempotent accept saga. Lets an offer-scoped caller (the gateway's
+  `POST /offers/{offer_id}/accept`) accept without first knowing the
+  `request_id` and without any gateway-side offer→request bookkeeping. Returns
+  `{:ok, :fresh | :replay, wire}` or `{:error, reason}`.
+  """
+  defdelegate accept_offer_by_id(
+                idempotency_key,
+                actor_id,
+                offer_id,
+                opts \\ [],
+                serializer \\ &(&1)
+              ),
+              to: AcceptByOffer,
               as: :run
 end
