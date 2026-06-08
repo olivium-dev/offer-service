@@ -63,12 +63,14 @@ defmodule OfferService.Auction.Acceptance do
           {:ok, success()} | {:error, error_reason()}
   def run(actor_id, request_id, offer_id, opts \\ []) do
     confirm_high_fee? = Keyword.get(opts, :confirm_high_fee, false)
-    # `authorize: false` is set ONLY by the offer-scoped accept path
-    # (`POST /api/v1/offers/:offer_id/accept`), where authorization has already
-    # been established by OFFER ownership (`offer.jeeber_id == actor_id`) before
-    # this saga runs. The request-scoped route keeps the default `true` so its
-    # client-ownership guard (`request.client_id == actor_id` => 403) is
-    # unchanged. Lifecycle/race/410/409 logic below is identical in both modes.
+    # `authorize: false` bypasses the request-CLIENT ownership guard below. It
+    # is reserved for internal/trusted callers that have ALREADY authorized the
+    # actor out-of-band; no HTTP route currently sets it. Both public accept
+    # routes — request-scoped (`POST /requests/:id/offers/:id/accept`) and
+    # offer-scoped (`POST /offers/:offer_id/accept`) — keep the default `true`,
+    # so the client-ownership guard (`request.client_id == actor_id` => 403) is
+    # the single source of truth. Lifecycle/race/410/409 logic below is
+    # identical regardless of the `authorize?` value.
     authorize? = Keyword.get(opts, :authorize, true)
     threshold = Application.get_env(:offer_service, :high_fee_threshold_cents, 5_000)
     started_at = System.monotonic_time()
@@ -170,10 +172,11 @@ defmodule OfferService.Auction.Acceptance do
       nil ->
         {:error, :not_found}
 
-      # Client-ownership guard — request-scoped accept only. The offer-scoped
-      # path passes `authorize? == false` because it already authorized on
-      # OFFER ownership before entering the saga; a non-owning Jeeber was
-      # rejected with 403 there, never reaching this transaction.
+      # Client-ownership guard — the authorized acceptor is the CLIENT who owns
+      # the parent request (`request.client_id == actor_id`). A Jeeber, or any
+      # other actor, is rejected with 403. Both public accept routes
+      # (request-scoped and offer-scoped) reach this clause; only trusted
+      # internal callers opt out via `authorize: false`.
       %Request{client_id: client_id} when authorize? and client_id != actor_id ->
         {:error, :forbidden}
 
