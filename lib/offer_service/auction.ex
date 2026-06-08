@@ -18,7 +18,17 @@ defmodule OfferService.Auction do
   internals.
   """
 
-  alias OfferService.Auction.{Acceptance, Edit, Idempotency, Submit, Withdraw}
+  alias OfferService.Auction.{Acceptance, Edit, Idempotency, RequestBridge, Submit, Withdraw}
+
+  @doc """
+  Idempotently mirror a gateway-created delivery request into this service.
+
+  The gateway is the system-of-record; it forwards the `request_id` it already
+  issued so that subsequent `submit_offer/3` calls can resolve the request row.
+  A replay for an already-mirrored id is a no-op that preserves the request's
+  current lifecycle state. Returns `{:ok, :created | :exists, request}`.
+  """
+  defdelegate upsert_request(attrs), to: RequestBridge, as: :upsert
 
   @doc "Submit a brand-new offer for `request_id` on behalf of `actor_id`."
   defdelegate submit_offer(actor_id, request_id, attrs), to: Submit, as: :run
