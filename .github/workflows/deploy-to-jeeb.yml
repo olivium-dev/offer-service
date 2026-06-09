@@ -113,6 +113,7 @@ jobs:
               --env-add "CHAT_SERVICE_URL=http://192.168.2.50:10028" \
               --env-add "NOTIFICATION_SERVICE_URL=http://192.168.2.50:10026" \
               --env-add "INTERNAL_SERVICE_TOKEN=$INTERNAL_SERVICE_TOKEN" \
+              --env-add "FORCE_EXPIRE_SEAM_ENABLED=true" \
               --env-add "PHX_SERVER=true" \
               --env-add "APP_ENV=production" \
               --update-order stop-first --update-failure-action rollback \
@@ -127,6 +128,7 @@ jobs:
               --env "CHAT_SERVICE_URL=http://192.168.2.50:10028" \
               --env "NOTIFICATION_SERVICE_URL=http://192.168.2.50:10026" \
               --env "INTERNAL_SERVICE_TOKEN=$INTERNAL_SERVICE_TOKEN" \
+              --env "FORCE_EXPIRE_SEAM_ENABLED=true" \
               --env "PHX_SERVER=true" \
               --env "APP_ENV=production" \
               "$TAG"
