@@ -22,6 +22,7 @@ defmodule OfferService.Auction do
     AcceptByOffer,
     Acceptance,
     Edit,
+    Expire,
     Idempotency,
     RequestBridge,
     Submit,
@@ -46,6 +47,17 @@ defmodule OfferService.Auction do
 
   @doc "Withdraw an offer. Terminal — cannot be re-submitted under the same (request, jeeber)."
   defdelegate withdraw_offer(actor_id, request_id, offer_id), to: Withdraw, as: :run
+
+  @doc """
+  Force a single offer to the terminal `expired` state (S07 / N3 test-seam).
+
+  This is the deterministic counterpart of the natural TTL sweep, exposed only
+  behind the service-auth + feature-flag-gated route
+  `POST /api/v1/offers/:offer_id/force-expire`. It exists so the E2E suite can
+  prove BR-OFR-8 (accepting an EXPIRED offer returns 410) without waiting on a
+  wall-clock TTL. Authorization is owned by the web pipeline, NOT this function.
+  """
+  defdelegate force_expire_offer(actor_id, offer_id), to: Expire, as: :run
 
   @doc "Accept an offer (called by the Client/gateway). First writer wins."
   defdelegate accept_offer(actor_id, request_id, offer_id, opts \\ []), to: Acceptance, as: :run

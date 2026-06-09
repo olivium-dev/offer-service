@@ -138,6 +138,46 @@ defmodule OfferServiceWeb.OfferController do
     end
   end
 
+  @doc """
+  POST /api/v1/offers/:offer_id/force-expire (S07 / N3 test-seam, additive).
+
+  Drives a single offer to the terminal `expired` state so the E2E suite can
+  assert BR-OFR-8 (accepting an EXPIRED offer returns 410) deterministically,
+  without waiting on the natural TTL sweep. After a 200 here, an accept on the
+  same offer returns 410 `offer_expired`.
+
+  This route is **guarded twice** by `OfferServiceWeb.Plugs.ServiceAuth`
+  (mounted on a dedicated pipeline): it is reachable only when the
+  `:force_expire_seam_enabled` flag is on (default off → 404) AND the caller
+  presents a valid `X-Service-Auth-Key` (else 401). It is NOT a user-facing
+  action and is never wired through the `AuthenticatedUser` plug.
+
+  Maps:
+    * 200 — offer driven to `expired`
+    * 404 — offer does not exist (or seam flag off)
+    * 410 — offer is already terminal (`offer_expired` / `offer_withdrawn`)
+    * 409 — offer already accepted/rejected, or concurrent modification
+  """
+  @spec force_expire(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def force_expire(conn, %{"offer_id" => offer_id}) do
+    with {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, offer} <- Auction.force_expire_offer(seam_actor_id(conn), offer_uuid) do
+      conn
+      |> put_status(:ok)
+      |> json(serialize(offer))
+    end
+  end
+
+  # The seam is service-authenticated, not user-authenticated, so there is no
+  # `conn.assigns.current_user_id`. Record whichever opaque operator identity the
+  # caller forwarded for the audit trail, falling back to "system".
+  defp seam_actor_id(conn) do
+    case Plug.Conn.get_req_header(conn, "x-user-id") do
+      [id | _] when is_binary(id) and byte_size(id) > 0 -> id
+      _ -> "system"
+    end
+  end
+
   # AC2: accept either `Idempotency-Key` or `idempotency-key` (HTTP is
   # case-insensitive; Plug normalises but we don't trust upstream).
   defp fetch_idempotency_key(conn) do

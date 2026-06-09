@@ -4,6 +4,17 @@ if System.get_env("PHX_SERVER") do
   config :offer_service, OfferServiceWeb.Endpoint, server: true
 end
 
+# S07 / N3 force-expire test-seam toggle. Default OFF (set in config.exs): the
+# route 404s unless FORCE_EXPIRE_SEAM_ENABLED=true is set at boot. Only override
+# the compile-time default when the env var is actually present, so per-env
+# config (e.g. config/test.exs enabling the seam) is not clobbered at runtime.
+# Even when enabled the route still requires a valid X-Service-Auth-Key matching
+# :service_token, so flipping this flag alone does not open an unauthenticated hole.
+case System.get_env("FORCE_EXPIRE_SEAM_ENABLED") do
+  nil -> :ok
+  value -> config :offer_service, force_expire_seam_enabled: value == "true"
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
