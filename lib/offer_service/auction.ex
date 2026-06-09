@@ -24,6 +24,7 @@ defmodule OfferService.Auction do
     Edit,
     Expire,
     Idempotency,
+    Reject,
     RequestBridge,
     Submit,
     Withdraw
@@ -47,6 +48,18 @@ defmodule OfferService.Auction do
 
   @doc "Withdraw an offer. Terminal — cannot be re-submitted under the same (request, jeeber)."
   defdelegate withdraw_offer(actor_id, request_id, offer_id), to: Withdraw, as: :run
+
+  @doc """
+  Reject an offer **by its id** on behalf of the request CLIENT (S08 / A5, additive).
+
+  Offer-scoped counterpart of the gateway's `POST /offers/{offer_id}/reject`.
+  Resolves the parent request from the offer, enforces request-CLIENT ownership
+  (`request.client_id == actor_id`, else `:forbidden`), then drives the offer to
+  `rejected` (terminal) without closing the auction — the request stays `open`
+  so the Client can keep shopping. Distinct from `withdraw_offer/3`, which is the
+  Jeeber retracting its OWN bid. Returns `{:ok, %Offer{}}` or `{:error, reason}`.
+  """
+  defdelegate reject_offer(actor_id, offer_id), to: Reject, as: :run
 
   @doc """
   Force a single offer to the terminal `expired` state (S07 / N3 test-seam).

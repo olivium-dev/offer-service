@@ -139,6 +139,34 @@ defmodule OfferServiceWeb.OfferController do
   end
 
   @doc """
+  POST /api/v1/offers/:offer_id/reject (S08 / A5, additive).
+
+  Offer-scoped CLIENT rejection of a single Jeeber bid — the route the gateway
+  forwards `POST /offers/{offer_id}/reject` to. The parent request is resolved
+  from the offer; authorization is request-CLIENT ownership (the Client who owns
+  the request rejects one Jeeber's bid; any other caller — including the offer's
+  own Jeeber — gets 403). The auction is NOT closed: the request stays `open`
+  so the Client may still accept another offer. Distinct from `withdraw/2`
+  (the Jeeber retracting its own bid).
+
+  200 on success with the serialized offer (`status: "rejected"`). Maps:
+
+    * 404 — offer (or its parent request) does not exist
+    * 403 — caller is not the request's Client
+    * 410 — offer is terminal (`offer_withdrawn` / `offer_expired`)
+    * 409 — offer already accepted/rejected, or concurrent modification
+  """
+  @spec reject(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def reject(conn, %{"offer_id" => offer_id}) do
+    with {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, offer} <- Auction.reject_offer(conn.assigns.current_user_id, offer_uuid) do
+      conn
+      |> put_status(:ok)
+      |> json(serialize(offer))
+    end
+  end
+
+  @doc """
   POST /api/v1/offers/:offer_id/force-expire (S07 / N3 test-seam, additive).
 
   Drives a single offer to the terminal `expired` state so the E2E suite can
