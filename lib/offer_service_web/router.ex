@@ -41,6 +41,12 @@ defmodule OfferServiceWeb.Router do
     # Resolves the request from the offer; offer-owner gated. Additive — the
     # request-scoped accept route above is unchanged.
     post "/offers/:offer_id/accept", OfferController, :accept_by_offer
+
+    # S08 / A5: offer-scoped CLIENT reject for the gateway's
+    # POST /offers/{id}/reject. Resolves the request from the offer; authorized
+    # by request-CLIENT ownership (the offer's own Jeeber -> 403). Additive —
+    # does not touch the request lifecycle (the auction stays open).
+    post "/offers/:offer_id/reject", OfferController, :reject
   end
 
   # S07 / N3 force-expire test-seam. Guarded by ServiceAuth (feature flag +
