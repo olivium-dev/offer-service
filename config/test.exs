@@ -25,7 +25,12 @@ config :offer_service, OfferServiceWeb.Endpoint,
 
 config :offer_service,
   notification_client: OfferService.Clients.NotificationClientMock,
-  fanout_strategy: :sync
+  fanout_strategy: :sync,
+  # Enable the S07/N3 force-expire seam in the test env with a known service
+  # token so the ServiceAuth gate (flag + X-Service-Auth-Key) can be exercised
+  # on both the happy path and the unauthorized/flag-off paths.
+  force_expire_seam_enabled: true,
+  service_token: "test-service-auth-key-do-not-use-in-prod"
 
 # Oban in :manual test mode — stops the Stager/Peer/Cron plugins from running
 # background DB transactions against the Ecto SQL Sandbox pool. Without this,

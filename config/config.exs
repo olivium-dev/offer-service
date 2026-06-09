@@ -16,7 +16,11 @@ config :offer_service, OfferServiceWeb.Endpoint,
 config :offer_service,
   notification_client: OfferService.Clients.NotificationClient.HTTP,
   high_fee_threshold_cents: 5_000,
-  otp_length: 4
+  otp_length: 4,
+  # S07 / N3 force-expire test-seam. Default OFF — the route 404s unless this is
+  # explicitly enabled per-env via FORCE_EXPIRE_SEAM_ENABLED (see runtime.exs).
+  # Even when enabled it still requires a valid X-Service-Auth-Key header.
+  force_expire_seam_enabled: false
 
 # PromEx configuration
 config :offer_service, OfferService.PromEx,

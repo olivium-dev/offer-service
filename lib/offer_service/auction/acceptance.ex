@@ -63,6 +63,7 @@ defmodule OfferService.Auction.Acceptance do
           | :request_cancelled
           | :offer_not_pending
           | :offer_withdrawn
+          | :offer_expired
           | {:already_accepted, Ecto.UUID.t() | nil}
           | :already_accepted
           | :concurrent_modification
@@ -231,6 +232,12 @@ defmodule OfferService.Auction.Acceptance do
 
       %Offer{status: "withdrawn"} ->
         {:error, :offer_withdrawn}
+
+      # Terminal lifecycle state — accepting an expired offer maps to HTTP 410
+      # (BR-OFR-8), distinct from the 409 catch-all below. The `:offer_expired`
+      # tag is already mapped to 410 in `OfferServiceWeb.FallbackController`.
+      %Offer{status: "expired"} ->
+        {:error, :offer_expired}
 
       %Offer{status: "accepted"} ->
         {:error, :already_accepted}

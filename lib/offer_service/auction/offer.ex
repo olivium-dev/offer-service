@@ -77,6 +77,21 @@ defmodule OfferService.Auction.Offer do
     |> optimistic_lock(:lock_version)
   end
 
+  @doc """
+  Changeset for the force-expire test-seam — marks the offer terminal
+  (`status: "expired"`). The offer schema carries no dedicated `expired_at`
+  column (unlike `withdrawn_at`/`accepted_at`); the precise expiry instant is
+  captured by the paired `offer_events` audit row (`action: "expire"`) and the
+  `[:offer, :transition]` telemetry event, so no migration is required.
+  """
+  @spec expire_changeset(t()) :: Ecto.Changeset.t()
+  def expire_changeset(%__MODULE__{} = offer) do
+    offer
+    |> change(status: "expired")
+    |> validate_inclusion(:status, @statuses)
+    |> optimistic_lock(:lock_version)
+  end
+
   @doc false
   @spec accept_changeset(t(), DateTime.t()) :: Ecto.Changeset.t()
   def accept_changeset(%__MODULE__{} = offer, now) do
