@@ -7,27 +7,14 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
   to — it carries no request_id, so offer-service resolves it from the offer and
   authorizes on request-CLIENT ownership (the Client who created the request is
   the only authorized acceptor; a Jeeber -> 403). Mirrors the request-scoped
-  controller test conventions (x-user-id auth header, idempotency-key header,
-  Mox-stubbed NotificationClient). offer-service holds NO chat client (fix C /
-  no-coupling LAW): the gateway BFF owns chat provisioning, so
-  `chat_thread_id` in the accept envelope is always nil.
+  controller test conventions (x-user-id auth header, idempotency-key header).
+  Per JEB-1474 the accept envelope is ONLY the generic transition outcome — no
+  OTP, no chat-thread linkage, no notifications (all gateway-owned).
 
   Auth identities use NON-UUID opaque `x-user-id` values (the gateway JWT `sub`,
   e.g. `s07-sami-client-9558`) to exercise the a3 uuid->text column widening.
   """
   use OfferServiceWeb.ConnCase, async: false
-
-  import Mox
-
-  alias OfferService.Clients.NotificationClientMock
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   defp client_id(who), do: "s07-#{who}-client-" <> Integer.to_string(:rand.uniform(9999))
   defp jeeber_id(who), do: "s07-#{who}-jeeber-" <> Integer.to_string(:rand.uniform(9999))
@@ -50,8 +37,9 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
       assert body["accepted_offer"]["id"] == offer.id
       assert body["accepted_offer"]["status"] == "accepted"
       assert body["request"]["status"] == "accepted"
-      assert body["chat_thread_id"] == nil
-      assert body["otp_code"] =~ ~r/^\d{4}$/
+      # JEB-1474: the generic accept envelope carries no OTP / chat-thread.
+      refute Map.has_key?(body, "otp_code")
+      refute Map.has_key?(body, "chat_thread_id")
       assert ["false"] = Plug.Conn.get_resp_header(conn, "x-idempotency-replay")
     end
 

@@ -8,48 +8,34 @@ defmodule OfferService.Auction.IdempotencyTest do
 
   use OfferService.DataCase, async: false
 
-  import Mox
-
   alias OfferService.Auction
-  alias OfferService.Auction.{AcceptanceIdempotencyKey, AcceptanceOtp, Offer, Request}
-  alias OfferService.Clients.NotificationClientMock
+  alias OfferService.Auction.{AcceptanceIdempotencyKey, Offer, Request}
   alias OfferService.Repo
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   # Minimal serializer that mimics the controller's wire shape so the
   # context test exercises the same persistence path the controller uses.
+  # JEB-1474: the saga result is ONLY the generic transition outcome — no OTP,
+  # no chat-thread linkage (those are gateway-owned).
   defp wire_serializer do
     fn %{
          request: request,
          accepted_offer: offer,
-         rejected_offer_ids: rejected_ids,
-         otp_code: otp_code,
-         thread_id: thread_id
+         rejected_offer_ids: rejected_ids
        } ->
       %{
         "request" => %{
           "id" => request.id,
           "status" => request.status,
-          "accepted_offer_id" => request.accepted_offer_id,
-          "chat_thread_id" => request.chat_thread_id
+          "accepted_offer_id" => request.accepted_offer_id
         },
         "accepted_offer" => %{
           "id" => offer.id,
-          "jeeber_id" => offer.jeeber_id,
+          "actor_id" => offer.actor_id,
           "fee_cents" => offer.fee_cents,
           "eta_minutes" => offer.eta_minutes,
           "status" => offer.status
         },
-        "rejected_offer_ids" => rejected_ids,
-        "chat_thread_id" => thread_id,
-        "otp_code" => otp_code
+        "rejected_offer_ids" => rejected_ids
       }
     end
   end
@@ -71,7 +57,6 @@ defmodule OfferService.Auction.IdempotencyTest do
                  wire_serializer()
                )
 
-      assert body["chat_thread_id"] == nil
       assert body["accepted_offer"]["id"] == offer.id
 
       [row] = Repo.all(AcceptanceIdempotencyKey)
@@ -81,12 +66,11 @@ defmodule OfferService.Auction.IdempotencyTest do
       assert row.offer_id == offer.id
       assert is_map(row.response)
       assert row.response["accepted_offer"]["id"] == offer.id
-      assert row.response["chat_thread_id"] == nil
     end
   end
 
   describe "accept_offer_idempotent/6 — replay" do
-    test "same key + same payload returns cached response, no second side-effects" do
+    test "same key + same payload returns cached response, saga not re-run" do
       request = insert_request!()
       offer = insert_offer!(request)
 
@@ -102,8 +86,6 @@ defmodule OfferService.Auction.IdempotencyTest do
                  wire_serializer()
                )
 
-      # Replay must NOT re-run the saga — proven below by the absence of a
-      # duplicate OTP / idem row.
       assert {:ok, :replay, cached} =
                Auction.accept_offer_idempotent(
                  key,
@@ -116,50 +98,11 @@ defmodule OfferService.Auction.IdempotencyTest do
 
       assert cached == first
 
-      # No duplicate OTP, no duplicate idem row, no duplicate accepted offer.
-      assert length(Repo.all(AcceptanceOtp)) == 1
+      # No duplicate idem row, no duplicate accepted offer — the single-winner
+      # transition is applied at most once.
       assert length(Repo.all(AcceptanceIdempotencyKey)) == 1
       assert Repo.get!(Offer, offer.id).status == "accepted"
       assert Repo.get!(Request, request.id).status == "accepted"
-    end
-
-    test "side-effects are NOT re-fired on replay" do
-      request = insert_request!()
-      offer = insert_offer!(request)
-
-      test_pid = self()
-
-      stub(NotificationClientMock, :notify, fn payload ->
-        send(test_pid, {:notified, payload})
-        :ok
-      end)
-
-      key = "idem-noside-" <> Ecto.UUID.generate()
-
-      assert {:ok, :fresh, _} =
-               Auction.accept_offer_idempotent(
-                 key,
-                 request.client_id,
-                 request.id,
-                 offer.id,
-                 [],
-                 wire_serializer()
-               )
-
-      # Drain first-run notifications.
-      _ = drain_messages([], 200)
-
-      assert {:ok, :replay, _} =
-               Auction.accept_offer_idempotent(
-                 key,
-                 request.client_id,
-                 request.id,
-                 offer.id,
-                 [],
-                 wire_serializer()
-               )
-
-      assert drain_messages([], 200) == []
     end
   end
 
@@ -220,14 +163,6 @@ defmodule OfferService.Auction.IdempotencyTest do
                  [],
                  wire_serializer()
                )
-    end
-  end
-
-  defp drain_messages(acc, timeout) do
-    receive do
-      msg -> drain_messages([msg | acc], timeout)
-    after
-      timeout -> Enum.reverse(acc)
     end
   end
 end

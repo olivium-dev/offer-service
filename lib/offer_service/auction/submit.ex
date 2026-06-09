@@ -2,7 +2,7 @@ defmodule OfferService.Auction.Submit do
   @moduledoc """
   Implements `POST /api/v1/requests/:request_id/offers`.
 
-  A Jeeber submits a new offer (price, ETA, optional note) against an open
+  An actor submits a new offer (price, ETA, optional note) against an open
   request. The request row is locked `FOR UPDATE` for the duration of the
   transaction so that a concurrent close-of-auction cannot interleave
   between the request-status read and the offer insert.
@@ -10,9 +10,9 @@ defmodule OfferService.Auction.Submit do
   Guards:
 
     * Request must exist (`:not_found`).
-    * Request must be in `open` status — the JEB-47 schema's persisted
-      name for "searching". Any other status returns `:request_not_open`.
-    * `(request_id, jeeber_id)` is unique — a re-submit returns
+    * Request must be in `open` status. Any other status returns
+      `:request_not_open`.
+    * `(request_id, actor_id)` is unique — a re-submit returns
       `:already_submitted`.
 
   Side-effects (all in the same transaction as the offer insert):
@@ -42,7 +42,7 @@ defmodule OfferService.Auction.Submit do
           | :already_submitted
           | Ecto.Changeset.t()
 
-  # actor_id is the opaque external Jeeber identity (gateway JWT `sub`), not a uuid.
+  # actor_id is the opaque external actor identity (gateway JWT `sub`), not a uuid.
   @spec run(actor_id :: binary(), request_id :: Ecto.UUID.t(), map()) ::
           {:ok, Offer.t()} | {:error, error_reason()}
   def run(actor_id, request_id, attrs) when is_binary(actor_id) and is_binary(request_id) do
@@ -53,7 +53,7 @@ defmodule OfferService.Auction.Submit do
     |> Multi.insert(:offer, fn _ ->
       %{
         request_id: request_id,
-        jeeber_id: actor_id,
+        actor_id: actor_id,
         fee_cents: attrs[:fee_cents] || attrs["fee_cents"],
         eta_minutes: attrs[:eta_minutes] || attrs["eta_minutes"],
         note: attrs[:note] || attrs["note"]
@@ -66,7 +66,7 @@ defmodule OfferService.Auction.Submit do
       OfferEvent.new_changeset(%{
         offer_id: offer.id,
         request_id: req.id,
-        actor_id: offer.jeeber_id,
+        actor_id: offer.actor_id,
         action: "submit",
         from_state: nil,
         to_state: offer.status,
@@ -103,7 +103,7 @@ defmodule OfferService.Auction.Submit do
     AuditLog.emit_telemetry(%{
       offer_id: offer.id,
       request_id: req.id,
-      actor_id: offer.jeeber_id,
+      actor_id: offer.actor_id,
       action: :submit,
       from_state: nil,
       to_state: offer.status
@@ -115,7 +115,7 @@ defmodule OfferService.Auction.Submit do
   defp handle_result({:error, :request, reason, _}) when is_atom(reason), do: {:error, reason}
 
   defp handle_result({:error, :offer, %Ecto.Changeset{errors: errors} = cs, _}) do
-    case Keyword.get(errors, :request_id) || Keyword.get(errors, :jeeber_id) do
+    case Keyword.get(errors, :request_id) || Keyword.get(errors, :actor_id) do
       {_msg, [constraint: :unique, constraint_name: "offers_request_id_jeeber_id_index"]} ->
         {:error, :already_submitted}
 

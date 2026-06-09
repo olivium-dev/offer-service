@@ -10,10 +10,10 @@ defmodule OfferService.Auction.AcceptByOfferTest do
   These tests prove the offer→request resolution and that authorization +
   every downstream negative/success is produced verbatim by the existing
   idempotent accept saga. No mocking of the saga itself — they hit the real DB
-  sandbox and the real `Acceptance`/`Idempotency` code; only the cross-service
-  NotificationClient is Mox-stubbed, exactly as the request-scoped acceptance
-  tests do. offer-service holds NO chat client (fix C / no-coupling LAW), so
-  chat provisioning is owned by the gateway BFF and `thread_id` is always nil.
+  sandbox and the real `Acceptance`/`Idempotency` code. Per JEB-1474 the shared
+  accept returns ONLY the generic transition outcome (accepted offer id +
+  rejected sibling ids); OTP, chat-thread linkage and notification fan-out are
+  owned by the consuming gateway, never this service.
 
   Actor ids use NON-UUID opaque identifiers (the gateway JWT `sub`, e.g.
   `s07-sami-client-9558`) to prove the a3 uuid->text column widening holds and
@@ -21,20 +21,9 @@ defmodule OfferService.Auction.AcceptByOfferTest do
   """
   use OfferService.DataCase, async: false
 
-  import Mox
-
   alias OfferService.Auction
   alias OfferService.Auction.{Offer, Request}
-  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   describe "accept_offer_by_id/5 — happy path (the request CLIENT accepts a Jeeber's offer)" do
     test "the request's client accepts a Jeeber offer by offer id; auction closes" do
@@ -74,7 +63,7 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       assert {:ok, :replay, second} =
                Auction.accept_offer_by_id(key, client, target.id, [], &serialize/1)
 
-      assert first["otp_code"] == second["otp_code"]
+      assert first == second
       assert first["accepted_offer"]["id"] == second["accepted_offer"]["id"]
       assert first["request"]["status"] == "accepted"
       assert second["request"]["status"] == "accepted"
@@ -203,24 +192,19 @@ defmodule OfferService.Auction.AcceptByOfferTest do
   defp serialize(%{
          request: request,
          accepted_offer: offer,
-         rejected_offer_ids: rejected_ids,
-         otp_code: otp_code,
-         thread_id: thread_id
+         rejected_offer_ids: rejected_ids
        }) do
     %{
       "request" => %{
         "id" => request.id,
         "status" => request.status,
-        "accepted_offer_id" => request.accepted_offer_id,
-        "chat_thread_id" => request.chat_thread_id
+        "accepted_offer_id" => request.accepted_offer_id
       },
       "accepted_offer" => %{
         "id" => offer.id,
         "status" => offer.status
       },
-      "rejected_offer_ids" => rejected_ids,
-      "chat_thread_id" => thread_id,
-      "otp_code" => otp_code
+      "rejected_offer_ids" => rejected_ids
     }
   end
 end

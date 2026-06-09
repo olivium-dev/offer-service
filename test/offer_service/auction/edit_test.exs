@@ -8,7 +8,9 @@ defmodule OfferService.Auction.EditTest do
     test "first edit: state submitted → edited, edits_count 0 → 1" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
 
       assert {:ok, %Offer{} = next} =
                Auction.edit_offer(jeeber, request.id, offer.id, %{fee_cents: 1_200})
@@ -22,7 +24,9 @@ defmodule OfferService.Auction.EditTest do
     test "second edit succeeds; third edit returns :edit_limit_reached" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
 
       assert {:ok, %{edits_count: 1}} =
                Auction.edit_offer(jeeber, request.id, offer.id, %{fee_cents: 1_100})
@@ -43,9 +47,12 @@ defmodule OfferService.Auction.EditTest do
     test "audit log records each edit with before/after payload" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
 
-      {:ok, _} = Auction.edit_offer(jeeber, request.id, offer.id, %{fee_cents: 1_200, note: "new"})
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, _} =
+        Auction.edit_offer(jeeber, request.id, offer.id, %{fee_cents: 1_200, note: "new"})
 
       events =
         OfferEvent
@@ -74,7 +81,10 @@ defmodule OfferService.Auction.EditTest do
     test "rejects edit on withdrawn offer (:offer_withdrawn)" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
       {:ok, _} = Auction.withdraw_offer(jeeber, request.id, offer.id)
 
       assert {:error, :offer_withdrawn} =
@@ -110,6 +120,7 @@ defmodule OfferService.Auction.EditTest do
       try do
         request = insert_request!()
         jeeber = uuid()
+
         {:ok, offer} =
           Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
 

@@ -20,20 +20,10 @@ defmodule OfferServiceWeb.ForceExpireControllerTest do
   """
   use OfferServiceWeb.ConnCase, async: false
 
-  import Mox
-
   alias OfferService.Auction.Offer
   alias OfferService.Repo
 
   @service_key "test-service-auth-key-do-not-use-in-prod"
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(OfferService.Clients.NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   defp client_id(who), do: "s07-#{who}-client-" <> Integer.to_string(:rand.uniform(9999))
   defp jeeber_id(who), do: "s07-#{who}-jeeber-" <> Integer.to_string(:rand.uniform(9999))

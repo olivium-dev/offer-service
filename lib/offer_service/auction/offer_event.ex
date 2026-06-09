@@ -22,7 +22,7 @@ defmodule OfferService.Auction.OfferEvent do
 
   schema "offer_events" do
     # External opaque identity — the acting user's gateway-forwarded JWT `sub`
-    # (mirrors `offers.jeeber_id` on submit), NOT a local uuid. Stored as
+    # (mirrors `offers.actor_id` on submit), NOT a local uuid. Stored as
     # `text`; see migration 20260520090000_widen_external_identity_columns_to_text.
     field :actor_id, :string
     field :action, :string

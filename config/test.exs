@@ -24,8 +24,10 @@ config :offer_service, OfferServiceWeb.Endpoint,
   server: false
 
 config :offer_service,
-  notification_client: OfferService.Clients.NotificationClientMock,
-  fanout_strategy: :sync,
+  # The shared service does not hardcode the edit cap; the test env pins a
+  # concrete `max_edits` so the edit-limit tests have a deterministic ceiling
+  # (the production default is `nil` — gateway-supplied).
+  max_edits: 2,
   # Enable the S07/N3 force-expire seam in the test env with a known service
   # token so the ServiceAuth gate (flag + X-Service-Auth-Key) can be exercised
   # on both the happy path and the unauthorized/flag-off paths.

@@ -9,15 +9,27 @@ defmodule OfferService.Auction.Offer do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  # Includes the legacy `pending` value so JEB-47 acceptance tests continue
-  # to pass while new code emits only the canonical six states.
+  # Includes the legacy `pending` value so historical acceptance rows continue
+  # to read while new code emits only the canonical six states.
   @statuses ~w(pending submitted edited withdrawn accepted rejected expired)
 
   schema "offers" do
-    # External opaque identity — the submitting Jeeber's gateway-forwarded JWT
-    # `sub` (`x-user-id`), NOT a local uuid. Stored as `text`; see migration
-    # 20260520090000_widen_external_identity_columns_to_text.
+    # Generic, product-agnostic identity of the actor that submitted the offer —
+    # the gateway-forwarded JWT `sub` (`x-user-id`), an opaque text id, NOT a
+    # local uuid. This is the canonical column new code reads/writes.
+    field :actor_id, :string
+
+    # DEPRECATED, read-compatible alias of `actor_id`, retained for the existing
+    # on-the-wire field name and any sibling consumers that still read the legacy
+    # column. Dual-written on insert so old readers keep working; never read by
+    # new code. (JEB-1474: kept as a non-breaking alias, not a new column.)
     field :jeeber_id, :string
+
+    # Generic parent reference (mirrors `request_id`). `request_id` remains the
+    # foreign key; `parent_id` is the product-agnostic alias, dual-written on
+    # insert and backfilled additively.
+    field :parent_id, :binary_id
+
     field :fee_cents, :integer
     field :eta_minutes, :integer
     field :note, :string
@@ -37,25 +49,28 @@ defmodule OfferService.Auction.Offer do
   @spec submit_changeset(map()) :: Ecto.Changeset.t()
   def submit_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:request_id, :jeeber_id, :fee_cents, :eta_minutes, :note])
-    |> validate_required([:request_id, :jeeber_id, :fee_cents, :eta_minutes])
+    |> cast(attrs, [:request_id, :actor_id, :fee_cents, :eta_minutes, :note])
+    |> validate_required([:request_id, :actor_id, :fee_cents, :eta_minutes])
     |> validate_number(:fee_cents, greater_than_or_equal_to: 100)
     |> validate_number(:eta_minutes, greater_than: 0, less_than_or_equal_to: 24 * 60)
     |> validate_length(:note, max: 1_000)
     |> put_change(:status, "submitted")
     |> put_change(:edits_count, 0)
+    |> mirror_generic_aliases()
     |> validate_inclusion(:status, @statuses)
-    |> unique_constraint([:request_id, :jeeber_id])
+    |> unique_constraint(:actor_id, name: :offers_request_id_jeeber_id_index)
   end
 
   @doc """
   Changeset for `edit_offer/3` — bumps `edits_count`, sets state to `:edited`,
-  and increments the optimistic lock version. The hard `edits_count ≤ 2`
-  ceiling is enforced both by the application (see `StateMachine.apply/2`)
-  and by the DB constraint `offers_edits_count_in_range`.
+  and increments the optimistic lock version.
+
+  The edit ceiling is supplied by the caller (`max_edits`) rather than hardcoded
+  in the shared service. When `max_edits` is `nil` no upper bound is enforced at
+  the schema layer — the consumer owns the policy.
   """
-  @spec edit_changeset(t(), map()) :: Ecto.Changeset.t()
-  def edit_changeset(%__MODULE__{edits_count: current} = offer, attrs) do
+  @spec edit_changeset(t(), map(), pos_integer() | nil) :: Ecto.Changeset.t()
+  def edit_changeset(%__MODULE__{edits_count: current} = offer, attrs, max_edits \\ nil) do
     offer
     |> cast(attrs, [:fee_cents, :eta_minutes, :note])
     |> validate_number(:fee_cents, greater_than_or_equal_to: 100)
@@ -64,7 +79,7 @@ defmodule OfferService.Auction.Offer do
     |> put_change(:status, "edited")
     |> put_change(:edits_count, (current || 0) + 1)
     |> validate_inclusion(:status, @statuses)
-    |> validate_number(:edits_count, less_than_or_equal_to: 2)
+    |> maybe_validate_edit_cap(max_edits)
     |> optimistic_lock(:lock_version)
   end
 
@@ -108,5 +123,26 @@ defmodule OfferService.Auction.Offer do
     |> change(status: "rejected", rejected_at: now)
     |> validate_inclusion(:status, @statuses)
     |> optimistic_lock(:lock_version)
+  end
+
+  # Dual-write the deprecated legacy alias (so old readers keep working) and the
+  # generic parent reference from the canonical columns. New code only reads
+  # `actor_id`/`parent_id`.
+  defp mirror_generic_aliases(changeset) do
+    actor_id = get_field(changeset, :actor_id)
+    request_id = get_field(changeset, :request_id)
+
+    changeset
+    |> maybe_put(:jeeber_id, actor_id)
+    |> maybe_put(:parent_id, request_id)
+  end
+
+  defp maybe_put(changeset, _field, nil), do: changeset
+  defp maybe_put(changeset, field, value), do: put_change(changeset, field, value)
+
+  defp maybe_validate_edit_cap(changeset, nil), do: changeset
+
+  defp maybe_validate_edit_cap(changeset, max_edits) when is_integer(max_edits) do
+    validate_number(changeset, :edits_count, less_than_or_equal_to: max_edits)
   end
 end

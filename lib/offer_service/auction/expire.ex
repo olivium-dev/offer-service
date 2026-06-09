@@ -8,8 +8,8 @@ defmodule OfferService.Auction.Expire do
   offer-service expiry is, by design, time/clock-driven: an offer's parent
   auction lapses after its TTL and the offer becomes terminal (`expired`). There
   is no synchronous, deterministic API to drive a *specific* offer to `expired`
-  for an end-to-end assertion — the E2E suite (jeeb-test-console) needs exactly
-  that to prove BR-OFR-8: *accepting an EXPIRED offer returns 410*.
+  for an end-to-end assertion — the E2E suite needs exactly that to prove
+  BR-OFR-8: *accepting an EXPIRED offer returns 410*.
 
   This module is the deterministic counterpart of the natural TTL sweep. It
   transitions one offer `submitted | edited | pending → expired` in a single
@@ -33,7 +33,7 @@ defmodule OfferService.Auction.Expire do
 
   The domain function itself performs no ownership check — it trusts that the
   pipeline above has authorized the (internal) caller. It deliberately does NOT
-  expose a `request.client_id`/`offer.jeeber_id` gate, because the seam must be
+  expose a `request.client_id`/`offer.actor_id` gate, because the seam must be
   drivable by an out-of-band operator/test harness that is neither party.
 
   ## Idempotency

@@ -20,27 +20,15 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
       `acceptance_idempotency_keys.client_id`.
 
   These tests drive the REAL Submit/Accept/Idempotency code against the DB
-  sandbox with non-uuid identities and assert success. Only the cross-service
-  NotificationClient is Mox-stubbed, exactly as the existing acceptance tests
-  do. offer-service holds NO chat client (fix C / no-coupling LAW), so
-  `thread_id` is always nil.
+  sandbox with non-uuid identities and assert success. Per JEB-1474 the shared
+  accept returns only the generic transition outcome (no OTP / chat-thread /
+  notification side effects — those are gateway-owned).
   """
   use OfferService.DataCase, async: false
 
-  import Mox
-
   alias OfferService.Auction
   alias OfferService.Auction.{Offer, OfferEvent, Request}
-  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   # The two S07 personas, verbatim from data/scenarios/scenario-S07.json — both
   # are opaque, non-uuid subs.
@@ -89,6 +77,8 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
                  "note" => "on it"
                })
 
+      # Canonical generic identity plus the dual-written deprecated alias.
+      assert offer.actor_id == @kamal
       assert offer.jeeber_id == @kamal
       assert offer.status == "submitted"
 
@@ -121,19 +111,19 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
       assert Repo.get!(Offer, kamal_offer.id).status == "accepted"
 
       # Idempotent replay: same key + same (actor, offer). The idempotency row
-      # (client_id = opaque @sami) is read back and the saga is NOT re-run —
-      # no second chat-thread expectation is set, so verify_on_exit! would flag
-      # a duplicate side effect.
+      # (client_id = opaque @sami) is read back and the saga is NOT re-run.
       assert {:ok, :replay, second} =
                Auction.accept_offer_by_id(key, @sami, kamal_offer.id, [], &serialize/1)
 
-      assert first["otp_code"] == second["otp_code"]
+      assert first == second
       assert first["accepted_offer"]["id"] == second["accepted_offer"]["id"]
     end
 
     test "ownership guard rejects a Jeeber accepting (only the request CLIENT may accept)" do
       request = mirror_request!(@sami)
-      {:ok, kamal_offer} = Auction.submit_offer(@kamal, request.id, %{"fee_cents" => 2_000, "eta_minutes" => 20})
+
+      {:ok, kamal_offer} =
+        Auction.submit_offer(@kamal, request.id, %{"fee_cents" => 2_000, "eta_minutes" => 20})
 
       # Kamal (the offer's own Jeeber, opaque sub) is NOT the request owner ->
       # 403, saga never entered. A Jeeber cannot accept its own bid.
@@ -165,9 +155,7 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
   defp serialize(%{
          request: request,
          accepted_offer: offer,
-         rejected_offer_ids: rejected_ids,
-         otp_code: otp_code,
-         thread_id: thread_id
+         rejected_offer_ids: rejected_ids
        }) do
     %{
       "request" => %{
@@ -176,9 +164,7 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
         "accepted_offer_id" => request.accepted_offer_id
       },
       "accepted_offer" => %{"id" => offer.id, "status" => offer.status},
-      "rejected_offer_ids" => rejected_ids,
-      "chat_thread_id" => thread_id,
-      "otp_code" => otp_code
+      "rejected_offer_ids" => rejected_ids
     }
   end
 end

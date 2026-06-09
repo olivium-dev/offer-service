@@ -10,8 +10,8 @@ defmodule OfferServiceWeb.RequestController do
   @doc """
   POST /api/v1/requests — gateway request-bridge.
 
-  Idempotently mirrors a gateway-created delivery request into offer-service so
-  that subsequent offer submits against `request_id` resolve. The gateway is the
+  Idempotently mirrors a gateway-created request into offer-service so that
+  subsequent offer submits against `request_id` resolve. The gateway is the
   system-of-record and forwards the id it already issued.
 
   Body: `{ "request_id": "<uuid>", "client_id": "<uuid>", "status": "open" }`

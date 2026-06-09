@@ -14,9 +14,11 @@ config :offer_service, OfferServiceWeb.Endpoint,
   live_view: [signing_salt: "OfferService"]
 
 config :offer_service,
-  notification_client: OfferService.Clients.NotificationClient.HTTP,
   high_fee_threshold_cents: 5_000,
-  otp_length: 4,
+  # JEB-1474 — the offer edit ceiling is NOT hardcoded in this shared service.
+  # `nil` ⇒ no service-imposed cap; the consuming gateway supplies `max_edits`
+  # per request. Set a concrete value here only for non-product environments.
+  max_edits: nil,
   # S07 / N3 force-expire test-seam. Default OFF — the route 404s unless this is
   # explicitly enabled per-env via FORCE_EXPIRE_SEAM_ENABLED (see runtime.exs).
   # Even when enabled it still requires a valid X-Service-Auth-Key header.
@@ -38,10 +40,11 @@ config :offer_service, Oban,
   repo: OfferService.Repo,
   plugins: [
     Oban.Plugins.Pruner,
-    {Oban.Plugins.Cron, crontab: [
-      # Example: cleanup old offers every day at 2 AM
-      # {"0 2 * * *", OfferService.Workers.CleanupWorker}
-    ]}
+    {Oban.Plugins.Cron,
+     crontab: [
+       # Example: cleanup old offers every day at 2 AM
+       # {"0 2 * * *", OfferService.Workers.CleanupWorker}
+     ]}
   ],
   queues: [
     default: 10,

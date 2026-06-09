@@ -32,20 +32,9 @@ defmodule OfferService.Auction.AcceptanceRaceTest do
   use OfferService.DataCase, async: false
   use ExUnitProperties
 
-  import Mox
-
   alias OfferService.Auction
-  alias OfferService.Auction.{AcceptanceOtp, Offer, Request}
-  alias OfferService.Clients.NotificationClientMock
+  alias OfferService.Auction.{Offer, Request}
   alias OfferService.Repo
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   describe "race-safety (sequential proof)" do
     test "20 concurrent accepts on the same request: exactly one winner" do
@@ -67,7 +56,7 @@ defmodule OfferService.Auction.AcceptanceRaceTest do
       winner_id =
         verdict.outcomes
         |> Enum.find_value(fn
-          {:winner, %{accepted_offer: %{jeeber_id: jid}}} -> jid
+          {:winner, %{accepted_offer: %{actor_id: aid}}} -> aid
           _ -> nil
         end)
 
@@ -119,9 +108,9 @@ defmodule OfferService.Auction.AcceptanceRaceTest do
   end
 
   defp build_request_with_offers(n) do
-    # offer-service holds no chat client (fix C / no-coupling LAW); the accept
-    # saga never calls chat. Single-winner is proven by the DB partial unique
-    # index + optimistic lock alone.
+    # The shared accept saga performs only the generic single-winner transition
+    # (JEB-1474). Single-winner is proven by the DB partial unique index +
+    # optimistic lock alone — no product-specific side effects are involved.
     request = insert_request!()
     offers = for _ <- 1..n, do: insert_offer!(request)
     {request, offers}
@@ -168,15 +157,6 @@ defmodule OfferService.Auction.AcceptanceRaceTest do
     request = Repo.get!(Request, request_id)
     assert request.status == "accepted"
     assert request.accepted_offer_id == hd(accepted).id
-
-    # Exactly one OTP row per request.
-    otps =
-      Repo.all(
-        from o in AcceptanceOtp,
-          where: o.request_id == ^request_id
-      )
-
-    assert length(otps) == 1
 
     # The winner outcome should agree with the DB.
     winner_outcome =

@@ -15,7 +15,4 @@ config :offer_service, OfferServiceWeb.Endpoint,
   code_reloader: true,
   secret_key_base: "dev-only-secret-not-for-production-please-do-not-use-this-key-ever"
 
-config :offer_service,
-  notification_service_url: System.get_env("NOTIFICATION_SERVICE_URL", "http://localhost:5001")
-
 config :logger, level: :debug

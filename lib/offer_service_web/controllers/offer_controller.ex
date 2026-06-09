@@ -70,13 +70,14 @@ defmodule OfferServiceWeb.OfferController do
   @doc """
   POST /api/v1/requests/:request_id/offers/:offer_id/accept
 
-  JEB-49 (T-BE-013). Atomic auction close:
+  Generic atomic auction close:
 
     * marks the chosen offer `accepted`, all siblings `rejected`;
-    * transitions the parent request to `accepted`;
-    * generates a 4-digit OTP (returned exactly once);
-    * opens a chat thread between Client and winning Jeeber;
-    * fans out push notifications to all parties.
+    * transitions the parent request to `accepted`.
+
+  Returns ONLY the generic transition outcome (accepted offer id + rejected
+  sibling ids). Product-domain side effects (OTP, conversation/chat-thread,
+  notification fan-out) are owned by the consuming gateway (JEB-1474).
 
   The `Idempotency-Key` header (case-insensitive) is **mandatory**.
   Replays with the same key and same payload return the cached
@@ -110,9 +111,9 @@ defmodule OfferServiceWeb.OfferController do
   POST /api/v1/offers/:offer_id/accept (S07 / OS-4, additive).
 
   Offer-scoped accept for the gateway's `POST /offers/{offer_id}/accept` route.
-  The parent request is resolved from the offer; authorization is request-CLIENT
-  ownership (the Client who owns the request accepts a Jeeber's bid; any other
-  caller — including the offer's own Jeeber — gets 403). Delegates to the same
+  The parent request is resolved from the offer; authorization is request-owner
+  ownership (the owner of the request accepts a bid; any other caller —
+  including the offer's own submitter — gets 403). Delegates to the same
   idempotent saga as `accept/2`, so every negative (404/403/410/409/422) and the
   success envelope are produced by the existing domain code — this action only
   resolves the offer and forwards the `Idempotency-Key`.
@@ -141,13 +142,13 @@ defmodule OfferServiceWeb.OfferController do
   @doc """
   POST /api/v1/offers/:offer_id/reject (S08 / A5, additive).
 
-  Offer-scoped CLIENT rejection of a single Jeeber bid — the route the gateway
-  forwards `POST /offers/{offer_id}/reject` to. The parent request is resolved
-  from the offer; authorization is request-CLIENT ownership (the Client who owns
-  the request rejects one Jeeber's bid; any other caller — including the offer's
-  own Jeeber — gets 403). The auction is NOT closed: the request stays `open`
-  so the Client may still accept another offer. Distinct from `withdraw/2`
-  (the Jeeber retracting its own bid).
+  Offer-scoped owner rejection of a single bid — the route the gateway forwards
+  `POST /offers/{offer_id}/reject` to. The parent request is resolved from the
+  offer; authorization is request-owner ownership (the owner of the request
+  rejects one bid; any other caller — including the offer's own submitter —
+  gets 403). The auction is NOT closed: the request stays `open` so the owner
+  may still accept another offer. Distinct from `withdraw/2` (the bidding actor
+  retracting its own bid).
 
   200 on success with the serialized offer (`status: "rejected"`). Maps:
 
@@ -232,7 +233,11 @@ defmodule OfferServiceWeb.OfferController do
     %{
       fee_cents: cast_integer(params["fee_cents"]),
       eta_minutes: cast_integer(params["eta_minutes"]),
-      note: params["note"]
+      note: params["note"],
+      # JEB-1474 / AC2 — the edit ceiling is supplied by the consumer (gateway),
+      # not hardcoded in the shared service. Forwarded to the edit saga; absent
+      # ⇒ the configurable :max_edits fallback applies.
+      max_edits: cast_integer(params["max_edits"])
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
@@ -258,6 +263,9 @@ defmodule OfferServiceWeb.OfferController do
     %{
       id: offer.id,
       request_id: offer.request_id,
+      # Generic, canonical identity. `jeeber_id` is retained alongside as a
+      # DEPRECATED, read-compatible wire alias for existing consumers.
+      actor_id: offer.actor_id,
       jeeber_id: offer.jeeber_id,
       fee_cents: offer.fee_cents,
       eta_minutes: offer.eta_minutes,
@@ -270,32 +278,30 @@ defmodule OfferServiceWeb.OfferController do
     }
   end
 
+  # JEB-1474 — the accept response is ONLY the generic transition outcome:
+  # the accepted offer id and the rejected sibling ids. No OTP, no chat-thread,
+  # no notification side effects (all owned by the consuming gateway).
   defp serialize_accept(%{
          request: request,
          accepted_offer: offer,
-         rejected_offer_ids: rejected_ids,
-         otp_code: otp_code,
-         thread_id: thread_id
+         rejected_offer_ids: rejected_ids
        }) do
     %{
       request: %{
         id: request.id,
         status: request.status,
-        accepted_offer_id: request.accepted_offer_id,
-        chat_thread_id: request.chat_thread_id
+        accepted_offer_id: request.accepted_offer_id
       },
       accepted_offer: %{
         id: offer.id,
+        actor_id: offer.actor_id,
         jeeber_id: offer.jeeber_id,
         fee_cents: offer.fee_cents,
         eta_minutes: offer.eta_minutes,
         status: offer.status,
         accepted_at: offer.accepted_at
       },
-      rejected_offer_ids: rejected_ids,
-      chat_thread_id: thread_id,
-      otp_code: otp_code
+      rejected_offer_ids: rejected_ids
     }
   end
-
 end

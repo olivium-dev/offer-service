@@ -15,18 +15,20 @@ defmodule OfferService.Fixtures do
   end
 
   def insert_offer!(request, attrs \\ %{}) do
+    # Accept either the canonical `:actor_id` or the deprecated `:jeeber_id`
+    # alias so existing callers keep working; mirror both columns exactly as
+    # submit_changeset does.
+    actor_id = attrs[:actor_id] || attrs[:jeeber_id] || uuid()
+
     attrs =
-      Map.merge(
-        %{
-          jeeber_id: uuid(),
-          fee_cents: 1_500,
-          eta_minutes: 25,
-          status: "pending",
-          edits_count: 0
-        },
-        attrs
-      )
-      |> Map.put(:request_id, request.id)
+      %{fee_cents: 1_500, eta_minutes: 25, status: "pending", edits_count: 0}
+      |> Map.merge(attrs)
+      |> Map.merge(%{
+        request_id: request.id,
+        parent_id: request.id,
+        actor_id: actor_id,
+        jeeber_id: actor_id
+      })
 
     %Offer{}
     |> Ecto.Changeset.change(attrs)

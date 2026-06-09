@@ -22,8 +22,10 @@ defmodule OfferService.Auction.StateMachinePropertyTest do
   @all_actions [:edit, :withdraw, :accept, :reject, :expire]
 
   property "any random sequence of actions preserves the six invariants" do
-    check all(actions <- list_of(member_of(@all_actions), min_length: 0, max_length: 20),
-              max_runs: 200) do
+    check all(
+            actions <- list_of(member_of(@all_actions), min_length: 0, max_length: 20),
+            max_runs: 200
+          ) do
       Enum.reduce(actions, StateMachine.initial(), fn action, acc ->
         case StateMachine.apply(acc, action) do
           {:ok, next} ->

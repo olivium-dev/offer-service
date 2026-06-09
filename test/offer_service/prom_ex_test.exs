@@ -4,10 +4,12 @@ defmodule OfferService.PromExTest do
   describe "PromEx configuration" do
     test "has required plugins configured" do
       plugins = OfferService.PromEx.plugins()
-      plugin_modules = Enum.map(plugins, fn
-        {module, _opts} -> module
-        module -> module
-      end)
+
+      plugin_modules =
+        Enum.map(plugins, fn
+          {module, _opts} -> module
+          module -> module
+        end)
 
       # Verify standard plugins are present
       assert PromEx.Plugins.Application in plugin_modules
@@ -15,17 +17,21 @@ defmodule OfferService.PromExTest do
       assert PromEx.Plugins.Oban in plugin_modules
 
       # Verify Phoenix plugin with router config
-      phoenix_config = Enum.find(plugins, fn
-        {PromEx.Plugins.Phoenix, _opts} -> true
-        _ -> false
-      end)
+      phoenix_config =
+        Enum.find(plugins, fn
+          {PromEx.Plugins.Phoenix, _opts} -> true
+          _ -> false
+        end)
+
       assert phoenix_config != nil
 
       # Verify Ecto plugin with repos config
-      ecto_config = Enum.find(plugins, fn
-        {PromEx.Plugins.Ecto, _opts} -> true
-        _ -> false
-      end)
+      ecto_config =
+        Enum.find(plugins, fn
+          {PromEx.Plugins.Ecto, _opts} -> true
+          _ -> false
+        end)
+
       assert ecto_config != nil
     end
 
