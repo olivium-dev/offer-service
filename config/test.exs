@@ -24,13 +24,8 @@ config :offer_service, OfferServiceWeb.Endpoint,
   server: false
 
 config :offer_service,
-  chat_client: OfferService.Clients.ChatClientMock,
   notification_client: OfferService.Clients.NotificationClientMock,
-  fanout_strategy: :sync,
-  # Run post-commit chat-thread provisioning synchronously in tests so the
-  # thread id is deterministically woven into the accept response and the
-  # request row; prod/dev fall through to the :async default.
-  chat_strategy: :sync
+  fanout_strategy: :sync
 
 # Oban in :manual test mode — stops the Stager/Peer/Cron plugins from running
 # background DB transactions against the Ecto SQL Sandbox pool. Without this,

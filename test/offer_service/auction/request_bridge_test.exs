@@ -50,7 +50,6 @@ defmodule OfferService.Auction.RequestBridgeTest do
       # Drive the request to `accepted` through the real saga.
       offer = insert_offer!(%Request{id: id, client_id: client_id})
       stub(OfferService.Clients.NotificationClientMock, :notify, fn _ -> :ok end)
-      expect(OfferService.Clients.ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-1"}} end)
       assert {:ok, %{}} = Acceptance.run(client_id, id, offer.id)
 
       accepted = Repo.get!(Request, id)

@@ -36,7 +36,7 @@ defmodule OfferService.Auction.AcceptanceRaceTest do
 
   alias OfferService.Auction
   alias OfferService.Auction.{AcceptanceOtp, Offer, Request}
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
 
   setup :set_mox_from_context
@@ -119,13 +119,9 @@ defmodule OfferService.Auction.AcceptanceRaceTest do
   end
 
   defp build_request_with_offers(n) do
-    # Each batch must stub the chat client to always succeed; even with
-    # mox set_from_context we use a `:stub` because exactly one call
-    # will reach the chat client (the winner).
-    stub(ChatClientMock, :create_thread, fn _ ->
-      {:ok, %{thread_id: "t-" <> Ecto.UUID.generate()}}
-    end)
-
+    # offer-service holds no chat client (fix C / no-coupling LAW); the accept
+    # saga never calls chat. Single-winner is proven by the DB partial unique
+    # index + optimistic lock alone.
     request = insert_request!()
     offers = for _ <- 1..n, do: insert_offer!(request)
     {request, offers}

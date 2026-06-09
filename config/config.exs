@@ -14,7 +14,6 @@ config :offer_service, OfferServiceWeb.Endpoint,
   live_view: [signing_salt: "OfferService"]
 
 config :offer_service,
-  chat_client: OfferService.Clients.ChatClient.HTTP,
   notification_client: OfferService.Clients.NotificationClient.HTTP,
   high_fee_threshold_cents: 5_000,
   otp_length: 4

@@ -3,7 +3,7 @@ defmodule OfferServiceWeb.OfferControllerTest do
 
   import Mox
 
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
 
   setup :set_mox_from_context
   setup :verify_on_exit!
@@ -17,7 +17,6 @@ defmodule OfferServiceWeb.OfferControllerTest do
     test "200 returns serialized result including 4-digit OTP", %{conn: conn} do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "thread-1"}} end)
 
       conn =
         conn
@@ -25,10 +24,12 @@ defmodule OfferServiceWeb.OfferControllerTest do
         |> put_req_header("idempotency-key", "idem-" <> Ecto.UUID.generate())
         |> post("/api/v1/requests/#{request.id}/offers/#{offer.id}/accept")
 
+      # chat_thread_id is always nil — the gateway BFF owns chat provisioning
+      # (fix C / no-coupling LAW); offer-service holds no chat client.
       assert %{
                "accepted_offer" => %{"id" => accepted_id, "status" => "accepted"},
                "rejected_offer_ids" => [],
-               "chat_thread_id" => "thread-1",
+               "chat_thread_id" => nil,
                "otp_code" => otp,
                "request" => %{"status" => "accepted"}
              } = json_response(conn, 200)
@@ -89,7 +90,6 @@ defmodule OfferServiceWeb.OfferControllerTest do
     test "200 high-fee accepted when confirm_high_fee=true", %{conn: conn} do
       request = insert_request!()
       offer = insert_offer!(request, %{fee_cents: 9_900})
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "thread-hf"}} end)
 
       conn =
         conn
@@ -143,7 +143,6 @@ defmodule OfferServiceWeb.OfferControllerTest do
       request = insert_request!()
       offer = insert_offer!(request)
       losing_offer = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-race"}} end)
 
       first_conn =
         conn
@@ -169,7 +168,6 @@ defmodule OfferServiceWeb.OfferControllerTest do
     } do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-replay"}} end)
 
       key = "idem-replay-" <> Ecto.UUID.generate()
 
@@ -182,8 +180,8 @@ defmodule OfferServiceWeb.OfferControllerTest do
       first_body = json_response(first, 200)
       assert ["false"] = Plug.Conn.get_resp_header(first, "x-idempotency-replay")
 
-      # Replay: same client_id, same key, same payload → no second
-      # ChatClientMock.create_thread, no second OTP, identical body.
+      # Replay: same client_id, same key, same payload → saga not re-run, no
+      # second OTP, identical body.
       second =
         Phoenix.ConnTest.build_conn()
         |> put_req_header("x-user-id", request.client_id)
@@ -204,7 +202,6 @@ defmodule OfferServiceWeb.OfferControllerTest do
       request = insert_request!()
       offer_a = insert_offer!(request)
       offer_b = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-mismatch"}} end)
 
       key = "idem-mismatch-" <> Ecto.UUID.generate()
 

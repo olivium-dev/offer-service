@@ -11,8 +11,9 @@ defmodule OfferService.Auction.AcceptByOfferTest do
   every downstream negative/success is produced verbatim by the existing
   idempotent accept saga. No mocking of the saga itself — they hit the real DB
   sandbox and the real `Acceptance`/`Idempotency` code; only the cross-service
-  ChatClient/NotificationClient are Mox-stubbed, exactly as the request-scoped
-  acceptance tests do.
+  NotificationClient is Mox-stubbed, exactly as the request-scoped acceptance
+  tests do. offer-service holds NO chat client (fix C / no-coupling LAW), so
+  chat provisioning is owned by the gateway BFF and `thread_id` is always nil.
 
   Actor ids use NON-UUID opaque identifiers (the gateway JWT `sub`, e.g.
   `s07-sami-client-9558`) to prove the a3 uuid->text column widening holds and
@@ -24,7 +25,7 @@ defmodule OfferService.Auction.AcceptByOfferTest do
 
   alias OfferService.Auction
   alias OfferService.Auction.{Offer, Request}
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
 
   setup :set_mox_from_context
@@ -41,8 +42,6 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       request = insert_request!(%{client_id: client})
       target = insert_offer!(request, %{jeeber_id: jeeber_id("kamal"), fee_cents: 2_000})
       sibling = insert_offer!(request, %{jeeber_id: jeeber_id("rana"), fee_cents: 1_800})
-
-      expect_chat_thread()
 
       assert {:ok, :fresh, body} =
                Auction.accept_offer_by_id(idem_key(), client, target.id)
@@ -63,8 +62,6 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       request = insert_request!(%{client_id: client})
       target = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
 
-      expect_chat_thread()
-
       key = idem_key()
 
       # Serialize to the wire shape (as the controller does) so the comparison
@@ -73,8 +70,7 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       assert {:ok, :fresh, first} =
                Auction.accept_offer_by_id(key, client, target.id, [], &serialize/1)
 
-      # Same key + same (actor, offer) => replay, saga is NOT re-run (no second
-      # chat-thread expectation set; verify_on_exit! would flag a 2nd call).
+      # Same key + same (actor, offer) => replay, saga is NOT re-run.
       assert {:ok, :replay, second} =
                Auction.accept_offer_by_id(key, client, target.id, [], &serialize/1)
 
@@ -104,7 +100,7 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       target = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
       stranger = client_id("intruder")
 
-      # No chat-thread expected: the saga must never run.
+      # The saga must never run.
       assert {:error, :forbidden} =
                Auction.accept_offer_by_id(idem_key(), stranger, target.id)
 
@@ -123,7 +119,6 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       client = client_id("sami")
       request = insert_request!(%{client_id: client})
       first = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
-      expect_chat_thread()
 
       assert {:ok, :fresh, _} =
                Auction.accept_offer_by_id(idem_key(), client, first.id)
@@ -166,7 +161,6 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       a = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
       b = insert_offer!(request, %{jeeber_id: jeeber_id("rana")})
 
-      expect_chat_thread()
       key = idem_key()
 
       assert {:ok, :fresh, _} = Auction.accept_offer_by_id(key, client, a.id)
@@ -183,8 +177,6 @@ defmodule OfferService.Auction.AcceptByOfferTest do
 
       assert {:error, :high_fee_confirmation_required} =
                Auction.accept_offer_by_id(idem_key(), client, offer.id)
-
-      expect_chat_thread()
 
       assert {:ok, :fresh, _} =
                Auction.accept_offer_by_id(
@@ -230,11 +222,5 @@ defmodule OfferService.Auction.AcceptByOfferTest do
       "chat_thread_id" => thread_id,
       "otp_code" => otp_code
     }
-  end
-
-  defp expect_chat_thread(thread_id \\ "thread-" <> Ecto.UUID.generate()) do
-    expect(ChatClientMock, :create_thread, fn _params ->
-      {:ok, %{thread_id: thread_id}}
-    end)
   end
 end

@@ -16,7 +16,6 @@ config :offer_service, OfferServiceWeb.Endpoint,
   secret_key_base: "dev-only-secret-not-for-production-please-do-not-use-this-key-ever"
 
 config :offer_service,
-  chat_service_url: System.get_env("CHAT_SERVICE_URL", "http://localhost:5000"),
   notification_service_url: System.get_env("NOTIFICATION_SERVICE_URL", "http://localhost:5001")
 
 config :logger, level: :debug
