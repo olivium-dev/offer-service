@@ -5,7 +5,7 @@ defmodule OfferService.Auction.WithdrawTest do
 
   alias OfferService.Auction
   alias OfferService.Auction.{Offer, OfferEvent}
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
 
   setup :set_mox_from_context
   setup :verify_on_exit!
@@ -88,8 +88,6 @@ defmodule OfferService.Auction.WithdrawTest do
       request = insert_request!()
       jeeber = uuid()
       {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
-
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "thread-x"}} end)
 
       assert {:ok, %{accepted_offer: %{id: id, status: "accepted"}}} =
                Auction.accept_offer(request.client_id, request.id, offer.id)

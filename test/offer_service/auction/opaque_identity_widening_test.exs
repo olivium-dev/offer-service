@@ -21,8 +21,9 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
 
   These tests drive the REAL Submit/Accept/Idempotency code against the DB
   sandbox with non-uuid identities and assert success. Only the cross-service
-  ChatClient/NotificationClient are Mox-stubbed, exactly as the existing
-  acceptance tests do.
+  NotificationClient is Mox-stubbed, exactly as the existing acceptance tests
+  do. offer-service holds NO chat client (fix C / no-coupling LAW), so
+  `thread_id` is always nil.
   """
   use OfferService.DataCase, async: false
 
@@ -30,7 +31,7 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
 
   alias OfferService.Auction
   alias OfferService.Auction.{Offer, OfferEvent, Request}
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
 
   setup :set_mox_from_context
@@ -107,8 +108,6 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
       {:ok, _rana_offer} =
         Auction.submit_offer(@rana, request.id, %{"fee_cents" => 1_800, "eta_minutes" => 30})
 
-      expect_chat_thread()
-
       key = "idem-" <> Ecto.UUID.generate()
 
       # Offer-scoped accept by the request-owning CLIENT (Sami), opaque sub.
@@ -161,10 +160,6 @@ defmodule OfferService.Auction.OpaqueIdentityWideningTest do
       })
 
     request
-  end
-
-  defp expect_chat_thread(thread_id \\ "thread-" <> Ecto.UUID.generate()) do
-    expect(ChatClientMock, :create_thread, fn _params -> {:ok, %{thread_id: thread_id}} end)
   end
 
   defp serialize(%{

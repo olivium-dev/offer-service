@@ -12,7 +12,7 @@ defmodule OfferService.Auction.IdempotencyTest do
 
   alias OfferService.Auction
   alias OfferService.Auction.{AcceptanceIdempotencyKey, AcceptanceOtp, Offer, Request}
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
 
   setup :set_mox_from_context
@@ -58,7 +58,6 @@ defmodule OfferService.Auction.IdempotencyTest do
     test "executes the saga and persists an idempotency-key row" do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "thread-fresh"}} end)
 
       key = "idem-fresh-" <> Ecto.UUID.generate()
 
@@ -72,7 +71,7 @@ defmodule OfferService.Auction.IdempotencyTest do
                  wire_serializer()
                )
 
-      assert body["chat_thread_id"] == "thread-fresh"
+      assert body["chat_thread_id"] == nil
       assert body["accepted_offer"]["id"] == offer.id
 
       [row] = Repo.all(AcceptanceIdempotencyKey)
@@ -82,7 +81,7 @@ defmodule OfferService.Auction.IdempotencyTest do
       assert row.offer_id == offer.id
       assert is_map(row.response)
       assert row.response["accepted_offer"]["id"] == offer.id
-      assert row.response["chat_thread_id"] == "thread-fresh"
+      assert row.response["chat_thread_id"] == nil
     end
   end
 
@@ -90,7 +89,6 @@ defmodule OfferService.Auction.IdempotencyTest do
     test "same key + same payload returns cached response, no second side-effects" do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-replay"}} end)
 
       key = "idem-replay-" <> Ecto.UUID.generate()
 
@@ -104,8 +102,8 @@ defmodule OfferService.Auction.IdempotencyTest do
                  wire_serializer()
                )
 
-      # No further ChatClientMock.create_thread expectation set; if the saga
-      # runs again Mox will fail verify_on_exit!.
+      # Replay must NOT re-run the saga — proven below by the absence of a
+      # duplicate OTP / idem row.
       assert {:ok, :replay, cached} =
                Auction.accept_offer_idempotent(
                  key,
@@ -128,7 +126,6 @@ defmodule OfferService.Auction.IdempotencyTest do
     test "side-effects are NOT re-fired on replay" do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-noside"}} end)
 
       test_pid = self()
 
@@ -171,7 +168,6 @@ defmodule OfferService.Auction.IdempotencyTest do
       request = insert_request!()
       offer_a = insert_offer!(request)
       offer_b = insert_offer!(request)
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "t-mm"}} end)
 
       key = "idem-mm-" <> Ecto.UUID.generate()
 
@@ -202,10 +198,6 @@ defmodule OfferService.Auction.IdempotencyTest do
 
       request_b = insert_request!()
       offer_b = insert_offer!(request_b)
-
-      expect(ChatClientMock, :create_thread, 2, fn _ ->
-        {:ok, %{thread_id: "t-" <> Ecto.UUID.generate()}}
-      end)
 
       key = "shared-key-" <> Ecto.UUID.generate()
 

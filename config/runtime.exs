@@ -32,9 +32,6 @@ if config_env() == :prod do
     secret_key_base: secret_key_base
 
   config :offer_service,
-    chat_service_url:
-      System.get_env("CHAT_SERVICE_URL") ||
-        raise("CHAT_SERVICE_URL is required"),
     notification_service_url:
       System.get_env("NOTIFICATION_SERVICE_URL") ||
         raise("NOTIFICATION_SERVICE_URL is required"),

@@ -2,10 +2,9 @@ defmodule OfferService.Auction.Acceptance do
   @moduledoc """
   Implements the auction-close flow for `POST /requests/:id/offers/:id/accept`.
 
-  The flow runs in a single Postgres transaction so that the four state changes
-  — accept-target / reject-siblings / persist-OTP / link-thread — either all
-  commit or all roll back. Concurrent acceptance attempts are blocked at two
-  levels:
+  The flow runs in a single Postgres transaction so that the state changes
+  — accept-target / reject-siblings / persist-OTP — either all commit or all
+  roll back. Concurrent acceptance attempts are blocked at two levels:
 
     1. The request row is locked with `SELECT ... FOR UPDATE`.
     2. The `Request` row carries a `lock_version` integer; the changeset uses
@@ -17,9 +16,20 @@ defmodule OfferService.Auction.Acceptance do
   `Task.Supervisor.start_child/2`, so a slow downstream cannot stall the API
   response or hold a connection in the pool.
 
-  Returned value on success: `{:ok, %{otp_code: ..., thread_id: ..., ...}}`.
+  Returned value on success: `{:ok, %{otp_code: ..., thread_id: nil, ...}}`.
   The OTP plaintext is returned exactly once to the Client; only a SHA-256
   hash is persisted.
+
+  ## Chat provisioning (fix C — no-coupling LAW)
+
+  offer-service holds NO chat client. Conversation provisioning for an accepted
+  offer is owned exclusively by the gateway BFF
+  (`ChatServiceConversationProvisioner`), which orchestrates request-sync,
+  delivery-create, and chat-advance after a successful accept. The
+  `chat_thread_id` column and the `thread_id` response key are retained for
+  backward-compatibility but are always `nil` here — they are never written by
+  this service. Microservices never call each other; all cross-service
+  composition lives in the gateway.
   """
 
   import Ecto.Query
@@ -28,7 +38,7 @@ defmodule OfferService.Auction.Acceptance do
 
   alias Ecto.Multi
   alias OfferService.Auction.{AcceptanceOtp, AuditLog, Offer, OfferEvent, OTP, Request}
-  alias OfferService.Clients.{ChatClient, NotificationClient}
+  alias OfferService.Clients.NotificationClient
   alias OfferService.Repo
 
   # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
@@ -57,7 +67,6 @@ defmodule OfferService.Auction.Acceptance do
           | :already_accepted
           | :concurrent_modification
           | :high_fee_confirmation_required
-          | :chat_service_unavailable
 
   @spec run(acceptor_id(), request_id(), offer_id(), opts()) ::
           {:ok, success()} | {:error, error_reason()}
@@ -89,12 +98,9 @@ defmodule OfferService.Auction.Acceptance do
       |> Multi.run(:otp, fn repo, %{request: r, accepted_offer: o} ->
         insert_otp(repo, r.id, o.id)
       end)
-      # Chat-thread creation is intentionally NOT a transaction step. It is a
-      # cross-service call to chat-service; coupling it inside the accept
-      # transaction made a chat outage roll back (and 502) the entire accept —
-      # OTP issuance, sibling-reject, audit included. The request commits with
-      # `chat_thread_id: nil`; the thread is provisioned post-commit, best-effort
-      # (see `maybe_create_chat_thread/3`), mirroring `fan_out_notifications/3`.
+      # offer-service never provisions chat (fix C / no-coupling LAW). The
+      # request commits with `chat_thread_id: nil`; the gateway BFF owns chat
+      # provisioning after a successful accept.
       |> Multi.update(:final_request, fn %{request: r, accepted_offer: o} ->
         Request.accept_changeset(r, %{
           accepted_offer_id: o.id,
@@ -297,14 +303,6 @@ defmodule OfferService.Auction.Acceptance do
 
     rejected_ids = Enum.map(rejected, & &1.id)
 
-    # Post-commit, best-effort: provision the chat thread OUTSIDE the accept
-    # transaction. A chat-service outage can no longer roll back or 502 the
-    # accept; the request is already committed with `chat_thread_id: nil`. In
-    # `:sync` mode (tests) the thread id is woven into the response; in `:async`
-    # mode (prod) creation is fire-and-forget via Task.Supervisor and the
-    # response carries `thread_id: nil`. Mirrors `fan_out_notifications/3`.
-    thread_id = maybe_create_chat_thread(final_request, accepted)
-
     fan_out_notifications(final_request, accepted, rejected)
 
     AuditLog.emit_telemetry(%{
@@ -339,11 +337,14 @@ defmodule OfferService.Auction.Acceptance do
 
     {:ok,
      %{
-       request: %{final_request | chat_thread_id: thread_id},
+       # chat_thread_id / thread_id are always nil here — the gateway BFF owns
+       # chat provisioning (fix C / no-coupling LAW). Keys retained for
+       # backward-compatible response shape.
+       request: %{final_request | chat_thread_id: nil},
        accepted_offer: %{accepted | status: "accepted"},
        rejected_offer_ids: rejected_ids,
        otp_code: otp_code,
-       thread_id: thread_id
+       thread_id: nil
      }}
   end
 
@@ -358,80 +359,6 @@ defmodule OfferService.Auction.Acceptance do
 
   defp handle_result({:error, _step, _other, _changes}, _actor_id),
     do: {:error, :concurrent_modification}
-
-  # Best-effort, post-commit chat-thread provisioning. The accept is ALREADY
-  # committed by the time this runs, so a chat-service failure can never roll it
-  # back or surface as a 502 — it is swallowed and logged, exactly like a failed
-  # notification fan-out. On success in `:sync` mode the request row is updated
-  # with the thread id and the id is returned so the API response can carry it;
-  # in `:async` mode the work is handed to the TaskSupervisor and `nil` is
-  # returned (the row is back-filled out of band when chat-service answers).
-  #
-  # TECH DEBT (fix C — separate ADR): this is still a direct offer->chat call,
-  # now non-fatal but coupling-by-best-effort. The law-correct end state is for
-  # the gateway BFF to own chat-thread provisioning so offer-service holds no
-  # chat client at all. Tracked as fix C; do not expand here.
-  defp maybe_create_chat_thread(%Request{} = request, %Offer{} = accepted) do
-    case Application.get_env(:offer_service, :chat_strategy, :async) do
-      :sync ->
-        do_create_chat_thread(request, accepted)
-
-      :async ->
-        Task.Supervisor.start_child(OfferService.TaskSupervisor, fn ->
-          do_create_chat_thread(request, accepted)
-        end)
-
-        nil
-    end
-  end
-
-  # Returns the persisted thread id on success, `nil` on any failure. NEVER
-  # raises and NEVER returns an error tuple — a chat outage must not affect the
-  # already-committed accept.
-  defp do_create_chat_thread(%Request{} = request, %Offer{} = accepted) do
-    params = %{
-      request_id: request.id,
-      offer_id: accepted.id,
-      client_id: request.client_id,
-      jeeber_id: accepted.jeeber_id
-    }
-
-    case ChatClient.create_thread(params) do
-      {:ok, %{thread_id: thread_id}} ->
-        link_chat_thread(request, thread_id)
-        thread_id
-
-      {:error, reason} ->
-        Logger.warning("offer.accept.chat_thread_deferred",
-          request_id: request.id,
-          accepted_offer_id: accepted.id,
-          reason: inspect(reason)
-        )
-
-        nil
-    end
-  rescue
-    error ->
-      Logger.error("offer.accept.chat_thread_crashed",
-        request_id: request.id,
-        error: inspect(error)
-      )
-
-      nil
-  end
-
-  # Back-fill `chat_thread_id` on the committed request without touching its
-  # lifecycle status or `lock_version` optimistic-lock guard, so a late chat
-  # write can never collide with a concurrent accept/cancel.
-  defp link_chat_thread(%Request{id: id}, thread_id) do
-    {_count, _} =
-      Repo.update_all(
-        from(r in Request, where: r.id == ^id and is_nil(r.chat_thread_id)),
-        set: [chat_thread_id: thread_id, updated_at: now()]
-      )
-
-    :ok
-  end
 
   defp fan_out_notifications(request, accepted, rejected) do
     run = fn -> do_fan_out(request, accepted, rejected) end

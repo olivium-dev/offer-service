@@ -5,7 +5,7 @@ defmodule OfferService.Auction.AcceptanceTest do
 
   alias OfferService.Auction
   alias OfferService.Auction.{AcceptanceOtp, Offer, Request}
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
 
   setup :set_mox_from_context
@@ -23,8 +23,6 @@ defmodule OfferService.Auction.AcceptanceTest do
       sibling_a = insert_offer!(request, %{fee_cents: 1_800})
       sibling_b = insert_offer!(request, %{fee_cents: 1_900})
 
-      expect_chat_thread()
-
       assert {:ok, result} =
                Auction.accept_offer(request.client_id, request.id, target.id)
 
@@ -41,25 +39,24 @@ defmodule OfferService.Auction.AcceptanceTest do
       assert length(rejected) == 2
     end
 
-    test "transitions the request to accepted with a chat thread id and accepted_offer_id" do
+    test "transitions the request to accepted with accepted_offer_id and chat_thread_id=nil" do
       request = insert_request!()
       offer = insert_offer!(request)
 
-      expect_chat_thread("thread-abc-123")
-
-      assert {:ok, %{thread_id: "thread-abc-123"}} =
+      # offer-service holds NO chat client (fix C / no-coupling LAW): the gateway
+      # BFF owns chat provisioning, so thread_id / chat_thread_id are always nil.
+      assert {:ok, %{thread_id: nil}} =
                Auction.accept_offer(request.client_id, request.id, offer.id)
 
       reloaded = Repo.get!(Request, request.id)
       assert reloaded.status == "accepted"
       assert reloaded.accepted_offer_id == offer.id
-      assert reloaded.chat_thread_id == "thread-abc-123"
+      assert reloaded.chat_thread_id == nil
     end
 
     test "generates a 4-digit OTP and persists only its hash" do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect_chat_thread()
 
       assert {:ok, %{otp_code: code}} =
                Auction.accept_offer(request.client_id, request.id, offer.id)
@@ -80,8 +77,6 @@ defmodule OfferService.Auction.AcceptanceTest do
       request = insert_request!()
       target = insert_offer!(request)
       sibling = insert_offer!(request)
-
-      expect_chat_thread()
 
       test_pid = self()
 
@@ -125,7 +120,6 @@ defmodule OfferService.Auction.AcceptanceTest do
     test "accepts a high-fee offer when confirm_high_fee is true" do
       request = insert_request!()
       offer = insert_offer!(request, %{fee_cents: 7_500})
-      expect_chat_thread()
 
       assert {:ok, _} =
                Auction.accept_offer(request.client_id, request.id, offer.id,
@@ -157,7 +151,6 @@ defmodule OfferService.Auction.AcceptanceTest do
     test "returns {:already_accepted, winner_user_id} when request is already accepted (JEB-49 / AC3)" do
       request = insert_request!()
       offer = insert_offer!(request)
-      expect_chat_thread()
 
       {:ok, _} = Auction.accept_offer(request.client_id, request.id, offer.id)
 
@@ -202,21 +195,21 @@ defmodule OfferService.Auction.AcceptanceTest do
     end
   end
 
-  describe "accept_offer/4 — chat-thread is non-fatal (S07 fix A)" do
-    # Chat-thread creation is post-commit best-effort: a chat-service outage
-    # must NEVER roll back or 502 the accept. The accept commits with
-    # chat_thread_id=nil; OTP issuance and sibling-reject still happen.
-    test "accept SUCCEEDS with thread_id=nil when chat client returns :chat_service_unavailable" do
+  describe "accept_offer/4 — offer-service holds NO chat client (S07 fix C)" do
+    # Chat provisioning is owned exclusively by the gateway BFF (no-coupling
+    # LAW). offer-service must never call chat-service. The accept commits fully
+    # — OTP issuance, sibling-reject, single-winner — with thread_id and
+    # chat_thread_id always nil. The previous best-effort offer->chat call (fix
+    # A) is removed entirely.
+    test "accept SUCCEEDS with thread_id=nil and never touches chat" do
       request = insert_request!()
       target = insert_offer!(request, %{fee_cents: 2_000})
       sibling = insert_offer!(request, %{fee_cents: 1_800})
 
-      expect(ChatClientMock, :create_thread, fn _ -> {:error, :chat_service_unavailable} end)
-
       assert {:ok, result} =
                Auction.accept_offer(request.client_id, request.id, target.id)
 
-      # The accept committed in full — only the chat link is absent.
+      # The accept committed in full — chat link is always absent.
       assert result.thread_id == nil
       assert result.request.chat_thread_id == nil
       assert result.accepted_offer.id == target.id
@@ -236,43 +229,9 @@ defmodule OfferService.Auction.AcceptanceTest do
       assert reloaded.accepted_offer_id == target.id
       assert reloaded.chat_thread_id == nil
     end
-
-    test "accept SUCCEEDS with thread_id=nil when chat client raises (transport crash)" do
-      request = insert_request!()
-      target = insert_offer!(request)
-
-      expect(ChatClientMock, :create_thread, fn _ -> raise "connection refused" end)
-
-      assert {:ok, result} =
-               Auction.accept_offer(request.client_id, request.id, target.id)
-
-      assert result.thread_id == nil
-      assert Repo.get!(Offer, target.id).status == "accepted"
-      assert Repo.get!(Request, request.id).status == "accepted"
-      assert [_otp] = Repo.all(AcceptanceOtp)
-    end
-
-    test "links chat_thread_id on the committed request when chat-service succeeds later" do
-      request = insert_request!()
-      offer = insert_offer!(request)
-
-      expect_chat_thread("thread-linked-xyz")
-
-      assert {:ok, %{thread_id: "thread-linked-xyz"}} =
-               Auction.accept_offer(request.client_id, request.id, offer.id)
-
-      # The post-commit success path back-fills the committed row.
-      assert Repo.get!(Request, request.id).chat_thread_id == "thread-linked-xyz"
-    end
   end
 
   # --- helpers -------------------------------------------------------------
-
-  defp expect_chat_thread(thread_id \\ "thread-" <> Ecto.UUID.generate()) do
-    expect(ChatClientMock, :create_thread, fn _params ->
-      {:ok, %{thread_id: thread_id}}
-    end)
-  end
 
   defp collect_notify_events(acc, 0, _timeout), do: Enum.reverse(acc)
 

@@ -8,7 +8,9 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
   authorizes on request-CLIENT ownership (the Client who created the request is
   the only authorized acceptor; a Jeeber -> 403). Mirrors the request-scoped
   controller test conventions (x-user-id auth header, idempotency-key header,
-  Mox-stubbed cross-service clients).
+  Mox-stubbed NotificationClient). offer-service holds NO chat client (fix C /
+  no-coupling LAW): the gateway BFF owns chat provisioning, so
+  `chat_thread_id` in the accept envelope is always nil.
 
   Auth identities use NON-UUID opaque `x-user-id` values (the gateway JWT `sub`,
   e.g. `s07-sami-client-9558`) to exercise the a3 uuid->text column widening.
@@ -17,7 +19,7 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
 
   import Mox
 
-  alias OfferService.Clients.{ChatClientMock, NotificationClientMock}
+  alias OfferService.Clients.NotificationClientMock
 
   setup :set_mox_from_context
   setup :verify_on_exit!
@@ -36,7 +38,6 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
       client = client_id("sami")
       request = insert_request!(%{client_id: client})
       offer = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
-      expect(ChatClientMock, :create_thread, fn _ -> {:ok, %{thread_id: "thread-os4"}} end)
 
       conn =
         conn
@@ -49,7 +50,7 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
       assert body["accepted_offer"]["id"] == offer.id
       assert body["accepted_offer"]["status"] == "accepted"
       assert body["request"]["status"] == "accepted"
-      assert body["chat_thread_id"] == "thread-os4"
+      assert body["chat_thread_id"] == nil
       assert body["otp_code"] =~ ~r/^\d{4}$/
       assert ["false"] = Plug.Conn.get_resp_header(conn, "x-idempotency-replay")
     end
@@ -59,7 +60,6 @@ defmodule OfferServiceWeb.AcceptByOfferControllerTest do
       request = insert_request!(%{client_id: client_id("sami")})
       offer = insert_offer!(request, %{jeeber_id: jeeber_id("kamal")})
 
-      # No ChatClientMock expectation: a 200 would fail verify_on_exit!.
       conn =
         conn
         |> put_req_header("x-user-id", offer.jeeber_id)
