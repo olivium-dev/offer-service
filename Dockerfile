@@ -59,7 +59,13 @@ RUN printf '%s\n' \
     > /app/bin/server && chmod +x /app/bin/server
 
 EXPOSE 4040
+# Use the release-bundled ERTS for the healthcheck instead of `wget`: the runtime image
+# (debian:bookworm-slim) installs only libstdc++6/openssl/libncurses5/locales/ca-certificates — it
+# has NO wget/curl, so the old `wget ... /health` probe exited 127 every interval, marking the task
+# unhealthy and getting it killed (~90s in: 30s interval x 3 retries) with no error logs (graceful
+# BEAM shutdown). `offer_service rpc 1` evaluates `1` on the running node via the bundled ERTS — it
+# needs no external binary and succeeds only while the BEAM node is actually up and responsive.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:4040/health || exit 1
+  CMD ["/app/bin/offer_service", "rpc", "1"]
 
 CMD ["/app/bin/server"]
