@@ -7,26 +7,16 @@ defmodule OfferServiceWeb.RejectControllerTest do
   to. It carries no request_id — offer-service resolves it from the offer and
   authorizes on request-CLIENT ownership (the Client who created the request is
   the only authorized rejecter; the offer's own Jeeber -> 403). Mirrors the
-  accept_by_offer controller test conventions (x-user-id auth header,
-  Mox-stubbed NotificationClient). Auth identities use NON-UUID opaque
+  accept_by_offer controller test conventions (x-user-id auth header). Per
+  JEB-1474 notification fan-out is gateway-owned; this service only performs the
+  generic transition + audit + telemetry. Auth identities use NON-UUID opaque
   `x-user-id` values (the gateway JWT `sub`) to exercise the uuid->text column
   widening.
   """
   use OfferServiceWeb.ConnCase, async: false
 
-  import Mox
-
   alias OfferService.Auction.Offer
-  alias OfferService.Clients.NotificationClientMock
   alias OfferService.Repo
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   defp client_id(who), do: "s08-#{who}-client-" <> Integer.to_string(:rand.uniform(9999))
   defp jeeber_id(who), do: "s08-#{who}-jeeber-" <> Integer.to_string(:rand.uniform(9999))

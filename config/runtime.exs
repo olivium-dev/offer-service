@@ -42,10 +42,8 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
+  # `service_token` guards the internal force-expire test-seam (ServiceAuth).
   config :offer_service,
-    notification_service_url:
-      System.get_env("NOTIFICATION_SERVICE_URL") ||
-        raise("NOTIFICATION_SERVICE_URL is required"),
     service_token:
       System.get_env("INTERNAL_SERVICE_TOKEN") ||
         raise("INTERNAL_SERVICE_TOKEN is required")

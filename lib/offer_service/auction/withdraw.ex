@@ -10,7 +10,7 @@ defmodule OfferService.Auction.Withdraw do
   Guards (in order):
 
     1. Request + offer exist and offer belongs to request (`:not_found`).
-    2. `actor_id == offer.jeeber_id` (`:forbidden`).
+    2. `actor_id == offer.actor_id` (`:forbidden`).
     3. `StateMachine.apply/2` permits `:withdraw` from current state.
 
   Side-effects inside the transaction:
@@ -37,7 +37,7 @@ defmodule OfferService.Auction.Withdraw do
           | :invalid_transition
           | :concurrent_modification
 
-  # actor_id is the opaque external Jeeber identity (gateway JWT `sub`), not a uuid.
+  # actor_id is the opaque external actor identity (gateway JWT `sub`), not a uuid.
   @spec run(actor_id :: binary(), request_id :: Ecto.UUID.t(), offer_id :: Ecto.UUID.t()) ::
           {:ok, Offer.t()} | {:error, error_reason()}
   def run(actor_id, request_id, offer_id)
@@ -47,12 +47,14 @@ defmodule OfferService.Auction.Withdraw do
     Multi.new()
     |> Multi.run(:offer, fn repo, _ -> lock_offer(repo, request_id, offer_id, actor_id) end)
     |> Multi.run(:transition, fn _repo, %{offer: offer} -> validate_transition(offer) end)
-    |> Multi.update(:withdrawn_offer, fn %{offer: offer} -> Offer.withdraw_changeset(offer, now) end)
+    |> Multi.update(:withdrawn_offer, fn %{offer: offer} ->
+      Offer.withdraw_changeset(offer, now)
+    end)
     |> Multi.insert(:audit, fn %{offer: prev, withdrawn_offer: next} ->
       OfferEvent.new_changeset(%{
         offer_id: next.id,
         request_id: next.request_id,
-        actor_id: next.jeeber_id,
+        actor_id: next.actor_id,
         action: "withdraw",
         from_state: prev.status,
         to_state: next.status,
@@ -76,7 +78,7 @@ defmodule OfferService.Auction.Withdraw do
 
     case repo.one(query) do
       nil -> {:error, :not_found}
-      %Offer{jeeber_id: ^actor_id} = offer -> {:ok, offer}
+      %Offer{actor_id: ^actor_id} = offer -> {:ok, offer}
       %Offer{} -> {:error, :forbidden}
     end
   end
@@ -96,7 +98,7 @@ defmodule OfferService.Auction.Withdraw do
     AuditLog.emit_telemetry(%{
       offer_id: next.id,
       request_id: next.request_id,
-      actor_id: next.jeeber_id,
+      actor_id: next.actor_id,
       action: :withdraw,
       from_state: prev.status,
       to_state: next.status

@@ -4,8 +4,8 @@ defmodule OfferService.Auction.RequestBridge do
 
   ## Why this exists
 
-  The Jeeb gateway is the system-of-record for a delivery request. A request
-  is created in the gateway (`POST /requests`) and gets an id there. Offers,
+  The gateway is the system-of-record for a request. A request is created in
+  the gateway (`POST /requests`) and gets an id there. Offers,
   however, are owned by this service and are submitted against that
   `request_id` (`POST /api/v1/requests/:request_id/offers`).
   `Submit.lock_request/2` locks the `requests` row `FOR UPDATE` and **requires

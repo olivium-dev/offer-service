@@ -1,35 +1,30 @@
 defmodule OfferService.Auction.Acceptance do
   @moduledoc """
-  Implements the auction-close flow for `POST /requests/:id/offers/:id/accept`.
+  Implements the generic auction-close transition for
+  `POST /requests/:id/offers/:id/accept`.
 
   The flow runs in a single Postgres transaction so that the state changes
-  — accept-target / reject-siblings / persist-OTP — either all commit or all
-  roll back. Concurrent acceptance attempts are blocked at two levels:
+  — accept-target / reject-siblings / transition-parent — either all commit or
+  all roll back. Concurrent acceptance attempts are blocked at two levels:
 
-    1. The request row is locked with `SELECT ... FOR UPDATE`.
+    1. The parent row is locked with `SELECT ... FOR UPDATE`.
     2. The `Request` row carries a `lock_version` integer; the changeset uses
        `Ecto.Changeset.optimistic_lock/2`, so a stale read raises
        `Ecto.StaleEntryError` and the whole transaction is rolled back.
 
-  Side-effects that must NOT participate in the database transaction (push
-  notifications) are dispatched after a successful commit via
-  `Task.Supervisor.start_child/2`, so a slow downstream cannot stall the API
-  response or hold a connection in the pool.
+  ## Boundary (JEB-1474)
 
-  Returned value on success: `{:ok, %{otp_code: ..., thread_id: nil, ...}}`.
-  The OTP plaintext is returned exactly once to the Client; only a SHA-256
-  hash is persisted.
-
-  ## Chat provisioning (fix C — no-coupling LAW)
-
-  offer-service holds NO chat client. Conversation provisioning for an accepted
-  offer is owned exclusively by the gateway BFF
-  (`ChatServiceConversationProvisioner`), which orchestrates request-sync,
-  delivery-create, and chat-advance after a successful accept. The
-  `chat_thread_id` column and the `thread_id` response key are retained for
-  backward-compatibility but are always `nil` here — they are never written by
-  this service. Microservices never call each other; all cross-service
+  This shared service owns ONLY the generic single-winner transition. It returns
+  the accepted offer id and the rejected sibling ids — nothing product-specific.
+  Product-domain side effects that used to run here — OTP-on-accept,
+  conversation/chat-thread creation, the parent's chat-thread linkage, and push
+  notification fan-out — have been moved OUT of this service and INTO the
+  consuming gateway, which orchestrates them via its typed clients after a
+  successful accept. Services never call each other; all cross-service
   composition lives in the gateway.
+
+  Returned value on success:
+  `{:ok, %{request: ..., accepted_offer: ..., rejected_offer_ids: [...]}}`.
   """
 
   import Ecto.Query
@@ -37,8 +32,7 @@ defmodule OfferService.Auction.Acceptance do
   require Logger
 
   alias Ecto.Multi
-  alias OfferService.Auction.{AcceptanceOtp, AuditLog, Offer, OfferEvent, OTP, Request}
-  alias OfferService.Clients.NotificationClient
+  alias OfferService.Auction.{AuditLog, Offer, OfferEvent, Request}
   alias OfferService.Repo
 
   # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
@@ -50,9 +44,7 @@ defmodule OfferService.Auction.Acceptance do
   @type success :: %{
           request: Request.t(),
           accepted_offer: Offer.t(),
-          rejected_offer_ids: [Ecto.UUID.t()],
-          otp_code: binary(),
-          thread_id: Ecto.UUID.t() | nil
+          rejected_offer_ids: [Ecto.UUID.t()]
         }
 
   @type error_reason ::
@@ -73,21 +65,20 @@ defmodule OfferService.Auction.Acceptance do
           {:ok, success()} | {:error, error_reason()}
   def run(actor_id, request_id, offer_id, opts \\ []) do
     confirm_high_fee? = Keyword.get(opts, :confirm_high_fee, false)
-    # `authorize: false` bypasses the request-CLIENT ownership guard below. It
-    # is reserved for internal/trusted callers that have ALREADY authorized the
-    # actor out-of-band; no HTTP route currently sets it. Both public accept
-    # routes — request-scoped (`POST /requests/:id/offers/:id/accept`) and
-    # offer-scoped (`POST /offers/:offer_id/accept`) — keep the default `true`,
-    # so the client-ownership guard (`request.client_id == actor_id` => 403) is
-    # the single source of truth. Lifecycle/race/410/409 logic below is
-    # identical regardless of the `authorize?` value.
+    # `authorize: false` bypasses the request-owner guard below. It is reserved
+    # for internal/trusted callers that have ALREADY authorized the actor
+    # out-of-band; no HTTP route currently sets it. Both public accept routes
+    # keep the default `true`, so the owner guard (`request.client_id ==
+    # actor_id` => 403) is the single source of truth.
     authorize? = Keyword.get(opts, :authorize, true)
     threshold = Application.get_env(:offer_service, :high_fee_threshold_cents, 5_000)
     started_at = System.monotonic_time()
 
     result =
       Multi.new()
-      |> Multi.run(:request, fn repo, _ -> lock_request(repo, request_id, actor_id, authorize?) end)
+      |> Multi.run(:request, fn repo, _ ->
+        lock_request(repo, request_id, actor_id, authorize?)
+      end)
       |> Multi.run(:offer, fn repo, %{request: r} -> load_target_offer(repo, r.id, offer_id) end)
       |> Multi.run(:high_fee_guard, fn _repo, %{offer: o} ->
         check_high_fee(o, confirm_high_fee?, threshold)
@@ -96,17 +87,11 @@ defmodule OfferService.Auction.Acceptance do
       |> Multi.run(:rejected_offer_ids, fn repo, %{request: r, offer: o} ->
         reject_siblings(repo, r.id, o.id)
       end)
-      |> Multi.run(:otp, fn repo, %{request: r, accepted_offer: o} ->
-        insert_otp(repo, r.id, o.id)
-      end)
-      # offer-service never provisions chat (fix C / no-coupling LAW). The
-      # request commits with `chat_thread_id: nil`; the gateway BFF owns chat
-      # provisioning after a successful accept.
+      # The parent's chat-thread linkage is owned by the gateway BFF (JEB-1474):
+      # this service transitions the parent to `accepted` with the winning offer
+      # id only and never writes a conversation/chat linkage.
       |> Multi.update(:final_request, fn %{request: r, accepted_offer: o} ->
-        Request.accept_changeset(r, %{
-          accepted_offer_id: o.id,
-          chat_thread_id: nil
-        })
+        Request.accept_changeset(r, %{accepted_offer_id: o.id})
       end)
       |> Multi.insert(:audit_accept, fn %{offer: prev, accepted_offer: next} ->
         OfferEvent.new_changeset(%{
@@ -136,7 +121,8 @@ defmodule OfferService.Auction.Acceptance do
       {:error, :concurrent_modification}
   end
 
-  # AC7 — emit `offer_accept_total{outcome}` and a structured log.
+  # Emit the product-agnostic `offer_accept_total{outcome}` counter and a
+  # structured log. No product-taxonomy naming.
   defp emit_accept_outcome(result, request_id, started_at) do
     duration_ms =
       System.convert_time_unit(System.monotonic_time() - started_at, :native, :millisecond)
@@ -144,7 +130,7 @@ defmodule OfferService.Auction.Acceptance do
     {outcome, extra} =
       case result do
         {:ok, %{accepted_offer: accepted}} ->
-          {:ok, %{winner_user_id: accepted.jeeber_id}}
+          {:ok, %{winner_user_id: accepted.actor_id}}
 
         {:error, {:already_accepted, winner}} ->
           {:already_accepted, %{winner_user_id: winner}}
@@ -182,26 +168,23 @@ defmodule OfferService.Auction.Acceptance do
       nil ->
         {:error, :not_found}
 
-      # Client-ownership guard — the authorized acceptor is the CLIENT who owns
-      # the parent request (`request.client_id == actor_id`). A Jeeber, or any
-      # other actor, is rejected with 403. Both public accept routes
-      # (request-scoped and offer-scoped) reach this clause; only trusted
-      # internal callers opt out via `authorize: false`.
+      # Owner guard — the authorized acceptor is the client who owns the parent
+      # request (`request.client_id == actor_id`). Any other actor is rejected
+      # with 403. Only trusted internal callers opt out via `authorize: false`.
       %Request{client_id: client_id} when authorize? and client_id != actor_id ->
         {:error, :forbidden}
 
       %Request{status: "open"} = request ->
         {:ok, request}
 
-      # JEB-49 / AC3 — race-loss path. The second of two simultaneous
-      # `Accept` calls blocks on the row-lock above; once the first
-      # commits, this transaction sees the request already accepted
-      # and returns the winning Jeeber's user id so the API caller can
-      # render `{ error: "already_accepted", winner_user_id }`.
+      # Race-loss path. The second of two simultaneous `Accept` calls blocks on
+      # the row-lock above; once the first commits, this transaction sees the
+      # request already accepted and returns the winner's actor id so the API
+      # caller can render `{ error: "already_accepted", winner_user_id }`.
       %Request{status: "accepted"} = request ->
         {:error, {:already_accepted, winner_user_id(repo, request)}}
 
-      # JEB-49 / AC4 — terminal lifecycle states map to HTTP 410.
+      # Terminal lifecycle states map to HTTP 410.
       %Request{status: "expired"} ->
         {:error, :request_expired}
 
@@ -217,7 +200,7 @@ defmodule OfferService.Auction.Acceptance do
 
   defp winner_user_id(repo, %Request{accepted_offer_id: accepted_offer_id}) do
     case repo.get(Offer, accepted_offer_id) do
-      %Offer{jeeber_id: jid} -> jid
+      %Offer{actor_id: aid} -> aid
       _ -> nil
     end
   end
@@ -265,7 +248,7 @@ defmodule OfferService.Auction.Acceptance do
             o.request_id == ^request_id and
               o.id != ^accepted_offer_id and
               o.status in ["pending", "submitted", "edited"],
-          select: %{id: o.id, jeeber_id: o.jeeber_id, status: o.status}
+          select: %{id: o.id, actor_id: o.actor_id, status: o.status}
         ),
         set: [status: "rejected", rejected_at: now, updated_at: now],
         inc: [lock_version: 1]
@@ -280,23 +263,6 @@ defmodule OfferService.Auction.Acceptance do
     {:ok, rejected}
   end
 
-  defp insert_otp(repo, request_id, offer_id) do
-    %{code: code, code_hash: hash, code_last2: last2, expires_at: expires_at} = OTP.generate()
-
-    attrs = %{
-      request_id: request_id,
-      offer_id: offer_id,
-      code_hash: hash,
-      code_last2: last2,
-      expires_at: expires_at
-    }
-
-    case repo.insert(AcceptanceOtp.new_changeset(attrs)) do
-      {:ok, otp} -> {:ok, %{record: otp, plaintext: code}}
-      {:error, _} = err -> err
-    end
-  end
-
   # --- Post-commit ---------------------------------------------------------
 
   defp handle_result({:ok, ctx}, actor_id) do
@@ -304,13 +270,10 @@ defmodule OfferService.Auction.Acceptance do
       offer: prev,
       accepted_offer: accepted,
       rejected_offer_ids: rejected,
-      otp: %{plaintext: otp_code},
       final_request: final_request
     } = ctx
 
     rejected_ids = Enum.map(rejected, & &1.id)
-
-    fan_out_notifications(final_request, accepted, rejected)
 
     AuditLog.emit_telemetry(%{
       offer_id: accepted.id,
@@ -321,7 +284,7 @@ defmodule OfferService.Auction.Acceptance do
       to_state: "accepted"
     })
 
-    Enum.each(rejected, fn %{id: id, jeeber_id: jid, status: from} ->
+    Enum.each(rejected, fn %{id: id, actor_id: rejected_actor_id, status: from} ->
       AuditLog.log!(%{
         offer_id: id,
         request_id: final_request.id,
@@ -335,7 +298,7 @@ defmodule OfferService.Auction.Acceptance do
       AuditLog.emit_telemetry(%{
         offer_id: id,
         request_id: final_request.id,
-        actor_id: jid,
+        actor_id: rejected_actor_id,
         action: :reject,
         from_state: from,
         to_state: "rejected"
@@ -344,14 +307,9 @@ defmodule OfferService.Auction.Acceptance do
 
     {:ok,
      %{
-       # chat_thread_id / thread_id are always nil here — the gateway BFF owns
-       # chat provisioning (fix C / no-coupling LAW). Keys retained for
-       # backward-compatible response shape.
-       request: %{final_request | chat_thread_id: nil},
+       request: final_request,
        accepted_offer: %{accepted | status: "accepted"},
-       rejected_offer_ids: rejected_ids,
-       otp_code: otp_code,
-       thread_id: nil
+       rejected_offer_ids: rejected_ids
      }}
   end
 
@@ -366,41 +324,6 @@ defmodule OfferService.Auction.Acceptance do
 
   defp handle_result({:error, _step, _other, _changes}, _actor_id),
     do: {:error, :concurrent_modification}
-
-  defp fan_out_notifications(request, accepted, rejected) do
-    run = fn -> do_fan_out(request, accepted, rejected) end
-
-    case Application.get_env(:offer_service, :fanout_strategy, :async) do
-      :sync -> run.()
-      :async -> Task.Supervisor.start_child(OfferService.TaskSupervisor, run)
-    end
-  end
-
-  defp do_fan_out(request, accepted, rejected) do
-    NotificationClient.notify(%{
-      user_id: accepted.jeeber_id,
-      event: :offer_accepted,
-      payload: %{request_id: request.id, offer_id: accepted.id}
-    })
-
-    Enum.each(rejected, fn %{id: offer_id, jeeber_id: jeeber_id} ->
-      NotificationClient.notify(%{
-        user_id: jeeber_id,
-        event: :offer_rejected,
-        payload: %{request_id: request.id, rejected_offer_id: offer_id}
-      })
-    end)
-
-    NotificationClient.notify(%{
-      user_id: request.client_id,
-      event: :auction_closed,
-      payload: %{
-        request_id: request.id,
-        accepted_offer_id: accepted.id,
-        rejected_count: length(rejected)
-      }
-    })
-  end
 
   defp now, do: DateTime.utc_now()
 end

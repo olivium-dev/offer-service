@@ -31,7 +31,7 @@ defmodule OfferService.Auction do
   }
 
   @doc """
-  Idempotently mirror a gateway-created delivery request into this service.
+  Idempotently mirror a gateway-created request into this service.
 
   The gateway is the system-of-record; it forwards the `request_id` it already
   issued so that subsequent `submit_offer/3` calls can resolve the request row.
@@ -46,7 +46,7 @@ defmodule OfferService.Auction do
   @doc "Edit an existing offer (≤2 times). 3rd edit returns `:edit_limit_reached`."
   defdelegate edit_offer(actor_id, request_id, offer_id, attrs), to: Edit, as: :run
 
-  @doc "Withdraw an offer. Terminal — cannot be re-submitted under the same (request, jeeber)."
+  @doc "Withdraw an offer. Terminal — cannot be re-submitted under the same (request, actor)."
   defdelegate withdraw_offer(actor_id, request_id, offer_id), to: Withdraw, as: :run
 
   @doc """
@@ -56,8 +56,9 @@ defmodule OfferService.Auction do
   Resolves the parent request from the offer, enforces request-CLIENT ownership
   (`request.client_id == actor_id`, else `:forbidden`), then drives the offer to
   `rejected` (terminal) without closing the auction — the request stays `open`
-  so the Client can keep shopping. Distinct from `withdraw_offer/3`, which is the
-  Jeeber retracting its OWN bid. Returns `{:ok, %Offer{}}` or `{:error, reason}`.
+  so the owner can keep shopping. Distinct from `withdraw_offer/3`, which is the
+  bidding actor retracting its OWN bid. Returns `{:ok, %Offer{}}` or
+  `{:error, reason}`.
   """
   defdelegate reject_offer(actor_id, offer_id), to: Reject, as: :run
 
@@ -90,7 +91,7 @@ defmodule OfferService.Auction do
                 request_id,
                 offer_id,
                 opts \\ [],
-                serializer \\ &(&1)
+                serializer \\ & &1
               ),
               to: Idempotency,
               as: :run
@@ -98,8 +99,8 @@ defmodule OfferService.Auction do
   @doc """
   Accept an offer **by its id** (S07 / OS-4, additive).
 
-  Resolves the parent request from the offer, enforces OFFER ownership
-  (`offer.jeeber_id == actor_id`, else `:forbidden`), then runs the existing
+  Resolves the parent request from the offer, enforces request-owner ownership
+  (`request.client_id == actor_id`, else `:forbidden`), then runs the existing
   idempotent accept saga. Lets an offer-scoped caller (the gateway's
   `POST /offers/{offer_id}/accept`) accept without first knowing the
   `request_id` and without any gateway-side offer→request bookkeeping. Returns
@@ -110,7 +111,7 @@ defmodule OfferService.Auction do
                 actor_id,
                 offer_id,
                 opts \\ [],
-                serializer \\ &(&1)
+                serializer \\ & &1
               ),
               to: AcceptByOffer,
               as: :run

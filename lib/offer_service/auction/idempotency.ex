@@ -6,8 +6,8 @@ defmodule OfferService.Auction.Idempotency do
 
     * `Idempotency-Key` is **mandatory** on `POST /…/accept`.
     * The same key replayed by the same `client_id` on the same
-      `request_id` returns the cached response verbatim — no second
-      OTP, no second chat thread, no duplicate push notifications.
+      `request_id` returns the cached response verbatim — the saga is not
+      re-run, so the single-winner transition is applied at most once.
     * The same key replayed with a divergent payload fingerprint
       (i.e. a different `offer_id` or opts) returns
       `{:error, :idempotency_mismatch}` — RFC 8943-style rejection.
@@ -68,7 +68,7 @@ defmodule OfferService.Auction.Idempotency do
           Acceptance.opts(),
           serializer()
         ) :: result()
-  def run(idempotency_key, actor_id, request_id, offer_id, opts \\ [], serializer \\ &(&1))
+  def run(idempotency_key, actor_id, request_id, offer_id, opts \\ [], serializer \\ & &1)
       when is_binary(idempotency_key) do
     fingerprint = fingerprint(actor_id, request_id, offer_id, opts)
 

@@ -25,7 +25,7 @@ defmodule OfferServiceWeb.FallbackController do
         conn,
         410,
         "request_expired",
-        "Delivery request expired and is no longer actionable"
+        "Request expired and is no longer actionable"
       )
 
   def call(conn, {:error, :request_cancelled}),
@@ -34,7 +34,7 @@ defmodule OfferServiceWeb.FallbackController do
         conn,
         410,
         "request_cancelled",
-        "Delivery request was cancelled and is no longer actionable"
+        "Request was cancelled and is no longer actionable"
       )
 
   # JEB-49 / AC3 — race-loss with winner identity.
@@ -96,7 +96,7 @@ defmodule OfferServiceWeb.FallbackController do
         conn,
         422,
         "edit_limit_reached",
-        "Offer has already been edited the maximum number of times (2)"
+        "Offer has already been edited the maximum number of times"
       )
 
   def call(conn, {:error, :offer_withdrawn}),
@@ -158,9 +158,6 @@ defmodule OfferServiceWeb.FallbackController do
         "conflict",
         "Offer fee exceeds the high-fee threshold; resend with confirm_high_fee=true"
       )
-
-  def call(conn, {:error, :chat_service_unavailable}),
-    do: render_error(conn, 502, "bad_gateway", "Chat service is temporarily unavailable")
 
   def call(conn, {:error, %Ecto.Changeset{} = cs}) do
     conn

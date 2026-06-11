@@ -5,11 +5,6 @@ defmodule OfferService.Auction.RequestBridgeTest do
   alias OfferService.Auction.{Acceptance, Offer, Request}
   alias OfferService.Repo
 
-  import Mox
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
   describe "upsert/1 — request-bridge" do
     test "creates an open request from a gateway-supplied id" do
       id = uuid()
@@ -45,11 +40,12 @@ defmodule OfferService.Auction.RequestBridgeTest do
     test "a replay never resets lifecycle state set by the accept saga" do
       id = uuid()
       client_id = uuid()
-      assert {:ok, :created, _} = Auction.upsert_request(%{"request_id" => id, "client_id" => client_id})
+
+      assert {:ok, :created, _} =
+               Auction.upsert_request(%{"request_id" => id, "client_id" => client_id})
 
       # Drive the request to `accepted` through the real saga.
       offer = insert_offer!(%Request{id: id, client_id: client_id})
-      stub(OfferService.Clients.NotificationClientMock, :notify, fn _ -> :ok end)
       assert {:ok, %{}} = Acceptance.run(client_id, id, offer.id)
 
       accepted = Repo.get!(Request, id)
@@ -84,7 +80,9 @@ defmodule OfferService.Auction.RequestBridgeTest do
       id = uuid()
       client_id = uuid()
       jeeber = uuid()
-      assert {:ok, :created, _} = Auction.upsert_request(%{"request_id" => id, "client_id" => client_id})
+
+      assert {:ok, :created, _} =
+               Auction.upsert_request(%{"request_id" => id, "client_id" => client_id})
 
       assert {:ok, %Offer{} = offer} =
                Auction.submit_offer(jeeber, id, %{fee_cents: 1_500, eta_minutes: 20})

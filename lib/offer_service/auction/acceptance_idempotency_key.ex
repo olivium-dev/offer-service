@@ -6,8 +6,8 @@ defmodule OfferService.Auction.AcceptanceIdempotencyKey do
 
   The `response` map is what the controller serialised on the first
   successful execution. Replays return this verbatim so the client sees
-  byte-identical output and `chat_thread_id` / `otp_code` / `delivery_id`
-  remain stable across retries.
+  byte-identical output (the accepted offer id and rejected sibling ids)
+  across retries.
 
   Mismatched-fingerprint replays (same key, different payload) are
   rejected by the application layer rather than silently overwriting

@@ -44,7 +44,7 @@ defmodule OfferServiceWeb.Router do
 
     # S08 / A5: offer-scoped CLIENT reject for the gateway's
     # POST /offers/{id}/reject. Resolves the request from the offer; authorized
-    # by request-CLIENT ownership (the offer's own Jeeber -> 403). Additive —
+    # by request-owner ownership (the offer's own submitter -> 403). Additive —
     # does not touch the request lifecycle (the auction stays open).
     post "/offers/:offer_id/reject", OfferController, :reject
   end

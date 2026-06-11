@@ -1,25 +1,16 @@
 defmodule OfferService.Auction.WithdrawTest do
   use OfferService.DataCase, async: false
 
-  import Mox
-
   alias OfferService.Auction
   alias OfferService.Auction.{Offer, OfferEvent}
-  alias OfferService.Clients.NotificationClientMock
-
-  setup :set_mox_from_context
-  setup :verify_on_exit!
-
-  setup do
-    stub(NotificationClientMock, :notify, fn _ -> :ok end)
-    :ok
-  end
 
   describe "withdraw_offer/3" do
     test "submitted → withdrawn writes withdrawn_at" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
 
       assert {:ok, %Offer{} = withdrawn} =
                Auction.withdraw_offer(jeeber, request.id, offer.id)
@@ -32,7 +23,10 @@ defmodule OfferService.Auction.WithdrawTest do
     test "edited → withdrawn preserves edits_count" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
       {:ok, edited} = Auction.edit_offer(jeeber, request.id, offer.id, %{fee_cents: 1_200})
 
       assert {:ok, %{status: "withdrawn", edits_count: 1}} =
@@ -42,7 +36,10 @@ defmodule OfferService.Auction.WithdrawTest do
     test "AC4: withdrawn offer cannot be re-withdrawn (:offer_withdrawn)" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
       {:ok, _} = Auction.withdraw_offer(jeeber, request.id, offer.id)
 
       assert {:error, :offer_withdrawn} =
@@ -52,7 +49,10 @@ defmodule OfferService.Auction.WithdrawTest do
     test "AC4: accept on a withdrawn offer returns :offer_withdrawn" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
       {:ok, _} = Auction.withdraw_offer(jeeber, request.id, offer.id)
 
       assert {:error, :offer_withdrawn} =
@@ -72,7 +72,10 @@ defmodule OfferService.Auction.WithdrawTest do
     test "audit log records the withdraw action" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
       {:ok, _} = Auction.withdraw_offer(jeeber, request.id, offer.id)
 
       events = OfferEvent |> Repo.all() |> Enum.sort_by(& &1.inserted_at)
@@ -87,7 +90,9 @@ defmodule OfferService.Auction.WithdrawTest do
     test "AC3 integration: submitted offer can still be accepted normally" do
       request = insert_request!()
       jeeber = uuid()
-      {:ok, offer} = Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
+
+      {:ok, offer} =
+        Auction.submit_offer(jeeber, request.id, %{fee_cents: 1_000, eta_minutes: 15})
 
       assert {:ok, %{accepted_offer: %{id: id, status: "accepted"}}} =
                Auction.accept_offer(request.client_id, request.id, offer.id)

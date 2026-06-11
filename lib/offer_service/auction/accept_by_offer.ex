@@ -5,7 +5,7 @@ defmodule OfferService.Auction.AcceptByOffer do
 
   ## Why this exists
 
-  The Jeeb mobile/gateway accept route is **offer-scoped**
+  The gateway accept route is **offer-scoped**
   (`POST /offers/{offer_id}/accept`) — the caller holds an `offer_id`, not the
   parent `request_id`. The canonical request-scoped saga
   (`POST /api/v1/requests/:request_id/offers/:offer_id/accept`) requires both
@@ -14,25 +14,24 @@ defmodule OfferService.Auction.AcceptByOffer do
   This module bridges the two **without inter-service coupling and without any
   gateway-side state**: it resolves the offer's `request_id` from the offer row
   itself, then delegates to the existing idempotent accept saga. The gateway can
-  therefore forward just the `offer_id` + the acting Jeeber id + the
+  therefore forward just the `offer_id` + the acting actor id + the
   `Idempotency-Key` and stay a stateless thin BFF.
 
   ## Authorization model (identical to the request-scoped route)
 
-  The auction acceptor in S07 is the **CLIENT who owns the parent request** —
-  the Jeeber *submits* an offer (a bid); the Client *accepts* one of those
-  offers, which closes the auction and creates the delivery. So the authorized
-  acceptor on BOTH the request-scoped and the offer-scoped routes is
-  `request.client_id == actor_id`. A Jeeber (even the offer's own Jeeber) is NOT
-  the acceptor and gets `403 :forbidden`.
+  The auction acceptor is the **owner of the parent request** — a bidding actor
+  *submits* an offer (a bid); the request owner *accepts* one of those offers,
+  which closes the auction. So the authorized acceptor on BOTH the
+  request-scoped and the offer-scoped routes is `request.client_id ==
+  actor_id`. Any other actor (even the offer's own submitter) is NOT the
+  acceptor and gets `403 :forbidden`.
 
   This module resolves the offer's parent `request_id` from the offer row, then
   delegates to the existing idempotent accept saga **with authorization left
-  ON** (`authorize: true`, the default). The saga's request-client guard
+  ON** (`authorize: true`, the default). The saga's request-owner guard
   (`OfferService.Auction.Acceptance.lock_request/4`, the
   `client_id != actor_id -> {:error, :forbidden}` clause) is the single source
-  of truth for the ownership decision — this module does not re-implement it,
-  avoiding the previous inverted (jeeber-owner) gate.
+  of truth for the ownership decision — this module does not re-implement it.
 
   All downstream negatives (`410` request_expired / offer_withdrawn,
   `409` already_accepted / not-pending / concurrent_modification, `403`
@@ -62,13 +61,13 @@ defmodule OfferService.Auction.AcceptByOffer do
 
   Resolves the parent request from the offer, then runs the existing idempotent
   accept saga keyed on `(request_id, offer_id)` with authorization left ON, so
-  the saga's request-CLIENT ownership guard decides 403. Returns the same
+  the saga's request-owner ownership guard decides 403. Returns the same
   `{:ok, mode, wire}` / `{:error, reason}` shape as
   `OfferService.Auction.accept_offer_idempotent/6`.
 
-  Authorization is the CLIENT who owns the parent request (`request.client_id ==
-  actor_id`); a Jeeber — including the offer's own Jeeber — is rejected with
-  `:forbidden` by the saga.
+  Authorization is the owner of the parent request (`request.client_id ==
+  actor_id`); any other actor — including the offer's own submitter — is
+  rejected with `:forbidden` by the saga.
   """
   @spec run(idem_key(), actor_id(), offer_id(), keyword(), (map() -> map())) :: result()
   def run(idempotency_key, actor_id, offer_id, opts \\ [], serializer \\ & &1)
@@ -79,11 +78,10 @@ defmodule OfferService.Auction.AcceptByOffer do
 
       %Offer{request_id: request_id} ->
         # Delegate to the idempotent saga with authorization ON (the default):
-        # the saga authorizes on request-CLIENT ownership
-        # (`request.client_id == actor_id`), which is the correct S07 rule —
-        # the Client accepts a Jeeber's bid. We deliberately do NOT pass
-        # `authorize: false`, so a Jeeber acceptor (or any non-owner) is
-        # rejected with `:forbidden`. opts is forwarded verbatim
+        # the saga authorizes on request-owner ownership
+        # (`request.client_id == actor_id`) — the request owner accepts a bid.
+        # We deliberately do NOT pass `authorize: false`, so any non-owner
+        # acceptor is rejected with `:forbidden`. opts is forwarded verbatim
         # (e.g. `confirm_high_fee:`), keeping the idempotency fingerprint
         # stable across replays.
         Idempotency.run(

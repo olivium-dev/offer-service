@@ -7,27 +7,26 @@ defmodule OfferService.Auction.Reject do
 
   The auction has two distinct terminal-by-loser paths:
 
-    * `Withdraw` — the **Jeeber** retracts its own bid
-      (`actor_id == offer.jeeber_id`, route is request-scoped).
-    * `Reject` (this module) — the **Client** who owns the parent request
-      declines a single Jeeber's bid *without* closing the auction. The Client
-      may keep shopping the remaining offers; only `Acceptance` closes the
-      request and reject-fans the siblings.
+    * `Withdraw` — the bidding actor retracts its own bid
+      (`actor_id == offer.actor_id`, route is request-scoped).
+    * `Reject` (this module) — the client who owns the parent request declines a
+      single bid *without* closing the auction. The client may keep shopping the
+      remaining offers; only `Acceptance` closes the request and reject-fans the
+      siblings.
 
   Prior to this module, `rejected` was produced **only** as a side effect of the
-  accept saga (`Acceptance.reject_siblings/3`). There was no way for a Client to
+  accept saga (`Acceptance.reject_siblings/3`). There was no way for a client to
   reject one bid directly. The `StateMachine` already encodes the `:reject`
   action (`submitted | edited -> rejected`) and `Offer.reject_changeset/2`
   already exists; this module is the missing command that drives them.
 
   ## Route shape and authorization
 
-  The Jeeb gateway forwards `POST /offers/{offer_id}/reject` — it carries no
+  The gateway forwards `POST /offers/{offer_id}/reject` — it carries no
   `request_id`. So, mirroring `AcceptByOffer`, this module resolves the parent
-  `request_id` from the offer row, then authorizes on **request-CLIENT
-  ownership** (`request.client_id == actor_id`). A Jeeber — including the
-  offer's own Jeeber — is NOT the rejecter and gets `403 :forbidden`. This
-  matches the realtime layer's `only_client_may_reject_offers` invariant.
+  `request_id` from the offer row, then authorizes on **request-owner
+  ownership** (`request.client_id == actor_id`). The bidding actor — including
+  the offer's own submitter — is NOT the rejecter and gets `403 :forbidden`.
 
   Guards (in order, all inside one transaction):
 
@@ -48,26 +47,23 @@ defmodule OfferService.Auction.Reject do
   Post-commit (NON-fatal, off the request path):
 
     * Emit `[:offer, :transition]` telemetry.
-    * Fan a single `:offer_rejected` push to the losing Jeeber, honoring the
-      `:fanout_strategy` config (`:async` by default, `:sync` in tests). A
-      notification failure never fails the rejection — the DB row is already
-      committed.
+
+  Notification fan-out is NOT performed here — it is owned by the consuming
+  gateway (JEB-1474 boundary remediation). This shared service emits only the
+  generic transition + audit + telemetry.
 
   The request lifecycle is intentionally **untouched**: rejecting a bid leaves
-  the request `open` so the Client can still accept another offer. Only
+  the request `open` so the client can still accept another offer. Only
   `Acceptance` writes the request to `accepted`.
   """
 
   import Ecto.Query
 
-  require Logger
-
   alias Ecto.Multi
   alias OfferService.Auction.{AuditLog, Offer, OfferEvent, Request, StateMachine}
-  alias OfferService.Clients.NotificationClient
   alias OfferService.Repo
 
-  # actor_id is the opaque external CLIENT identity (gateway JWT `sub`), not a uuid.
+  # actor_id is the opaque external client identity (gateway JWT `sub`), not a uuid.
   @type actor_id :: binary()
   @type offer_id :: Ecto.UUID.t()
 
@@ -105,15 +101,16 @@ defmodule OfferService.Auction.Reject do
       OfferEvent.new_changeset(%{
         offer_id: next.id,
         request_id: next.request_id,
-        # The Client is the rejecting actor on the audit trail (Withdraw records
-        # the Jeeber; Reject records the Client). Both are opaque text identities.
+        # The request owner is the acting actor on the audit trail (Withdraw
+        # records the offer's submitter; Reject records the request owner). Both
+        # are opaque text identities.
         actor_id: actor_id,
         action: "reject",
         from_state: prev.status,
         to_state: next.status,
         payload: %{
           "rejected_at" => DateTime.to_iso8601(now),
-          "jeeber_id" => next.jeeber_id
+          "actor_id" => next.actor_id
         },
         inserted_at: now
       })
@@ -133,10 +130,10 @@ defmodule OfferService.Auction.Reject do
     end
   end
 
-  # Lock + client-ownership guard. A phantom request id is treated as
-  # `:not_found` (the offer row would carry a dangling FK only under data
-  # corruption). Only the request CLIENT may reject; everyone else (including
-  # the offer's own Jeeber) gets `:forbidden`.
+  # Lock + owner guard. A phantom request id is treated as `:not_found` (the
+  # offer row would carry a dangling FK only under data corruption). Only the
+  # request owner may reject; everyone else (including the offer's own
+  # submitting actor) gets `:forbidden`.
   defp lock_request(repo, request_id, actor_id) do
     case repo.one(from r in Request, where: r.id == ^request_id, lock: "FOR UPDATE") do
       nil -> {:error, :not_found}
@@ -167,7 +164,6 @@ defmodule OfferService.Auction.Reject do
       payload: %{}
     })
 
-    notify_rejected(next)
     {:ok, next}
   end
 
@@ -175,24 +171,4 @@ defmodule OfferService.Auction.Reject do
     do: {:error, reason}
 
   defp handle_result({:error, _step, %Ecto.Changeset{} = cs, _}, _actor_id), do: {:error, cs}
-
-  # Post-commit, off the request path. A notification failure must never fail a
-  # rejection whose DB row is already committed — mirrors the accept saga's
-  # fan-out strategy switch.
-  defp notify_rejected(%Offer{} = offer) do
-    run = fn ->
-      NotificationClient.notify(%{
-        user_id: offer.jeeber_id,
-        event: :offer_rejected,
-        payload: %{request_id: offer.request_id, rejected_offer_id: offer.id}
-      })
-    end
-
-    case Application.get_env(:offer_service, :fanout_strategy, :async) do
-      :sync -> run.()
-      :async -> Task.Supervisor.start_child(OfferService.TaskSupervisor, run)
-    end
-
-    :ok
-  end
 end
