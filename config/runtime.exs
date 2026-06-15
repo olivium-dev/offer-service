@@ -15,6 +15,22 @@ case System.get_env("FORCE_EXPIRE_SEAM_ENABLED") do
   value -> config :offer_service, force_expire_seam_enabled: value == "true"
 end
 
+# `service_token` guards the internal force-expire test-seam (ServiceAuth plug).
+# It used to be wired ONLY inside the :prod block below, which meant a local/dev
+# bring-up (MIX_ENV=dev) that enabled the seam flag had a `nil` :service_token and
+# the plug failed closed (401) on every call. Honor INTERNAL_SERVICE_TOKEN in ANY
+# env when it is present, so the seam can be exercised against a dev instance
+# without forcing MIX_ENV=prod. Default-off is preserved: with no env var set the
+# token stays unconfigured and the plug still fails closed. The :test env keeps its
+# own compile-time token from config/test.exs and is left untouched here.
+if config_env() != :test do
+  case System.get_env("INTERNAL_SERVICE_TOKEN") do
+    nil -> :ok
+    "" -> :ok
+    token -> config :offer_service, service_token: token
+  end
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
