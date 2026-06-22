@@ -5,6 +5,29 @@ defmodule OfferServiceWeb.OfferController do
   alias OfferService.Auction.Offer
 
   @doc """
+  GET /api/v1/requests/:request_id/offers
+
+  Lists every offer on the request for the request's owning CLIENT
+  (the gateway accept-sheet / bid-review). Request-owner gated.
+
+  200 with `{ "offers": [ <serialized offer>, ... ] }` (possibly empty).
+  Maps:
+
+    * 404 — request does not exist
+    * 403 — caller is not the request's Client
+  """
+  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def index(conn, %{"request_id" => request_id}) do
+    with {:ok, request_uuid} <- cast_uuid(request_id),
+         {:ok, offers} <-
+           Auction.list_offers_for_request(conn.assigns.current_user_id, request_uuid) do
+      conn
+      |> put_status(:ok)
+      |> json(%{offers: Enum.map(offers, &serialize/1)})
+    end
+  end
+
+  @doc """
   POST /api/v1/requests/:request_id/offers
 
   Body: `{ "fee_cents": 1500, "eta_minutes": 25, "note": "free text" }`

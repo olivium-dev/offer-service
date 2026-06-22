@@ -24,6 +24,7 @@ defmodule OfferService.Auction do
     Edit,
     Expire,
     Idempotency,
+    ListForRequest,
     Reject,
     RequestBridge,
     Submit,
@@ -39,6 +40,16 @@ defmodule OfferService.Auction do
   current lifecycle state. Returns `{:ok, :created | :exists, request}`.
   """
   defdelegate upsert_request(attrs), to: RequestBridge, as: :upsert
+
+  @doc """
+  List every offer on `request_id` for the request's owning CLIENT.
+
+  The read backing `GET /api/v1/requests/:request_id/offers` (the gateway's
+  accept-sheet / bid-review list). Enforces request-CLIENT ownership
+  (`request.client_id == actor_id`, else `:forbidden`); an unknown request is
+  `:not_found`. Returns `{:ok, [%Offer{}]}` newest-first (possibly empty).
+  """
+  defdelegate list_offers_for_request(actor_id, request_id), to: ListForRequest, as: :run
 
   @doc "Submit a brand-new offer for `request_id` on behalf of `actor_id`."
   defdelegate submit_offer(actor_id, request_id, attrs), to: Submit, as: :run
