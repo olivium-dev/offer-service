@@ -32,6 +32,9 @@ defmodule OfferServiceWeb.Router do
     # Gateway request-bridge: mirror a gateway-created request so offers resolve.
     post "/requests", RequestController, :create
 
+    # Client-facing list of all offers on a request (the gateway accept-sheet
+    # / bid-review). Request-owner gated; additive read route. (offerlist-fix)
+    get "/requests/:request_id/offers", OfferController, :index
     post "/requests/:request_id/offers", OfferController, :submit
     put "/requests/:request_id/offers/:offer_id", OfferController, :edit
     delete "/requests/:request_id/offers/:offer_id", OfferController, :withdraw
