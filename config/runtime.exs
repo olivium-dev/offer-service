@@ -1,5 +1,43 @@
 import Config
 
+callback_enabled =
+  case String.downcase(System.get_env("GATEWAY_CALLBACK_ENABLED") || "false") do
+    value when value in ["true", "1", "yes"] -> true
+    value when value in ["false", "0", "no"] -> false
+    value -> raise "GATEWAY_CALLBACK_ENABLED must be true or false, got: #{inspect(value)}"
+  end
+
+parse_positive_integer = fn env_name, default ->
+  case Integer.parse(System.get_env(env_name) || Integer.to_string(default)) do
+    {value, ""} when value > 0 -> value
+    _ -> raise "#{env_name} must be a positive integer"
+  end
+end
+
+callback_base_url = System.get_env("GATEWAY_CALLBACK_BASE_URL")
+callback_path = System.get_env("GATEWAY_CALLBACK_PATH") || "/svc-callbacks/notify"
+
+if callback_enabled do
+  uri = URI.parse(callback_base_url || "")
+
+  unless uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" and
+           is_nil(uri.query) and is_nil(uri.fragment) do
+    raise "GATEWAY_CALLBACK_BASE_URL must be an absolute http(s) URL without query or fragment"
+  end
+
+  unless String.starts_with?(callback_path, "/") do
+    raise "GATEWAY_CALLBACK_PATH must start with /"
+  end
+end
+
+config :offer_service, :gateway_callbacks,
+  enabled: callback_enabled,
+  base_url: callback_base_url,
+  path: callback_path,
+  timeout_ms: parse_positive_integer.("GATEWAY_CALLBACK_TIMEOUT_MS", 5_000),
+  attempts: parse_positive_integer.("GATEWAY_CALLBACK_ATTEMPTS", 10),
+  locale: System.get_env("GATEWAY_CALLBACK_LOCALE") || "en"
+
 if System.get_env("PHX_SERVER") do
   config :offer_service, OfferServiceWeb.Endpoint, server: true
 end

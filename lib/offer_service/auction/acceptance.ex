@@ -33,6 +33,7 @@ defmodule OfferService.Auction.Acceptance do
 
   alias Ecto.Multi
   alias OfferService.Auction.{AuditLog, Offer, OfferEvent, Request}
+  alias OfferService.GatewayCallbacks
   alias OfferService.Repo
 
   # Opaque external identity (gateway JWT `sub`), not necessarily a uuid.
@@ -105,6 +106,12 @@ defmodule OfferService.Auction.Acceptance do
           inserted_at: DateTime.utc_now()
         })
       end)
+      |> GatewayCallbacks.multi_enqueue(
+        :gateway_callback_accept,
+        :audit_accept,
+        & &1.accepted_offer.actor_id
+      )
+      |> Multi.merge(&sibling_audits_and_callbacks(&1, actor_id))
       |> Repo.transaction()
       |> handle_result(actor_id)
 
@@ -263,6 +270,35 @@ defmodule OfferService.Auction.Acceptance do
     {:ok, rejected}
   end
 
+  defp sibling_audits_and_callbacks(
+         %{
+           rejected_offer_ids: rejected,
+           accepted_offer: accepted
+         },
+         actor_id
+       ) do
+    Enum.reduce(rejected, Multi.new(), fn sibling, multi ->
+      audit_name = {:audit_reject, sibling.id}
+      callback_name = {:gateway_callback_reject, sibling.id}
+
+      multi
+      |> Multi.insert(
+        audit_name,
+        OfferEvent.new_changeset(%{
+          offer_id: sibling.id,
+          request_id: accepted.request_id,
+          actor_id: actor_id,
+          action: "reject",
+          from_state: sibling.status,
+          to_state: "rejected",
+          payload: %{"sibling_of" => accepted.id},
+          inserted_at: DateTime.utc_now()
+        })
+      )
+      |> GatewayCallbacks.multi_enqueue(callback_name, audit_name, fn _ -> sibling.actor_id end)
+    end)
+  end
+
   # --- Post-commit ---------------------------------------------------------
 
   defp handle_result({:ok, ctx}, actor_id) do
@@ -285,16 +321,6 @@ defmodule OfferService.Auction.Acceptance do
     })
 
     Enum.each(rejected, fn %{id: id, actor_id: rejected_actor_id, status: from} ->
-      AuditLog.log!(%{
-        offer_id: id,
-        request_id: final_request.id,
-        actor_id: actor_id,
-        action: :reject,
-        from_state: from,
-        to_state: "rejected",
-        payload: %{"sibling_of" => accepted.id}
-      })
-
       AuditLog.emit_telemetry(%{
         offer_id: id,
         request_id: final_request.id,

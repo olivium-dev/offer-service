@@ -28,6 +28,7 @@ defmodule OfferService.Auction.Submit do
 
   alias Ecto.Multi
   alias OfferService.Auction.{AuditLog, Offer, OfferEvent, Request, StateMachine}
+  alias OfferService.GatewayCallbacks
   alias OfferService.Repo
 
   @type submit_attrs :: %{
@@ -78,6 +79,7 @@ defmodule OfferService.Auction.Submit do
         inserted_at: DateTime.utc_now()
       })
     end)
+    |> GatewayCallbacks.multi_enqueue(:gateway_callback, :audit, & &1.request.client_id)
     |> Repo.transaction()
     |> handle_result()
   end
