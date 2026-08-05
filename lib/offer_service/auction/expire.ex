@@ -54,6 +54,7 @@ defmodule OfferService.Auction.Expire do
 
   alias Ecto.Multi
   alias OfferService.Auction.{AuditLog, Offer, OfferEvent, StateMachine}
+  alias OfferService.GatewayCallbacks
   alias OfferService.Repo
 
   @type error_reason ::
@@ -93,6 +94,7 @@ defmodule OfferService.Auction.Expire do
         inserted_at: now
       })
     end)
+    |> GatewayCallbacks.multi_enqueue(:gateway_callback, :audit, & &1.expired_offer.actor_id)
     |> Repo.transaction()
     |> handle_result(actor_id)
   rescue

@@ -24,6 +24,14 @@ config :offer_service,
   # Even when enabled it still requires a valid X-Service-Auth-Key header.
   force_expire_seam_enabled: false
 
+config :offer_service, :gateway_callbacks,
+  enabled: false,
+  base_url: nil,
+  path: "/svc-callbacks/notify",
+  timeout_ms: 5_000,
+  attempts: 10,
+  locale: "en"
+
 # PromEx configuration
 config :offer_service, OfferService.PromEx,
   disabled: false,

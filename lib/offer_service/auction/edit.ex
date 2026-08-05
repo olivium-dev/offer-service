@@ -28,7 +28,8 @@ defmodule OfferService.Auction.Edit do
   import Ecto.Query
 
   alias Ecto.Multi
-  alias OfferService.Auction.{AuditLog, Offer, OfferEvent, StateMachine}
+  alias OfferService.Auction.{AuditLog, Offer, OfferEvent, Request, StateMachine}
+  alias OfferService.GatewayCallbacks
   alias OfferService.Repo
 
   @type edit_attrs :: %{
@@ -59,6 +60,7 @@ defmodule OfferService.Auction.Edit do
 
     Multi.new()
     |> Multi.run(:offer, fn repo, _ -> lock_offer(repo, request_id, offer_id, actor_id) end)
+    |> Multi.run(:request, fn repo, %{offer: offer} -> load_request(repo, offer.request_id) end)
     |> Multi.run(:transition, fn _repo, %{offer: offer} ->
       validate_transition(offer, max_edits)
     end)
@@ -89,6 +91,7 @@ defmodule OfferService.Auction.Edit do
         inserted_at: DateTime.utc_now()
       })
     end)
+    |> GatewayCallbacks.multi_enqueue(:gateway_callback, :audit, & &1.request.client_id)
     |> Repo.transaction()
     |> handle_result()
   rescue
@@ -107,6 +110,13 @@ defmodule OfferService.Auction.Edit do
       nil -> {:error, :not_found}
       %Offer{actor_id: ^actor_id} = offer -> {:ok, offer}
       %Offer{} -> {:error, :forbidden}
+    end
+  end
+
+  defp load_request(repo, request_id) do
+    case repo.get(Request, request_id) do
+      nil -> {:error, :not_found}
+      request -> {:ok, request}
     end
   end
 

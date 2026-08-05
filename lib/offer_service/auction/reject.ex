@@ -61,6 +61,7 @@ defmodule OfferService.Auction.Reject do
 
   alias Ecto.Multi
   alias OfferService.Auction.{AuditLog, Offer, OfferEvent, Request, StateMachine}
+  alias OfferService.GatewayCallbacks
   alias OfferService.Repo
 
   # actor_id is the opaque external client identity (gateway JWT `sub`), not a uuid.
@@ -115,6 +116,7 @@ defmodule OfferService.Auction.Reject do
         inserted_at: now
       })
     end)
+    |> GatewayCallbacks.multi_enqueue(:gateway_callback, :audit, & &1.rejected_offer.actor_id)
     |> Repo.transaction()
     |> handle_result(actor_id)
   rescue
