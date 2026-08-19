@@ -1,7 +1,7 @@
 ---
 # Deploy to Jeeb -- zero-downtime Docker Swarm deploy over the Cloudflare tunnel.
 # Generated from the pilot-proven geolocation-service pattern.
-#   * minimal-downtime: service UPDATE (rollback-on-failure); CREATE only when
+#   * minimal-downtime: service UPDATE (pause-on-failure); CREATE only when
 #     absent -- NEVER service rm + service create.
 #     NOTE: update-order is stop-first, NOT start-first. With mode=host published
 #     ports on a single Swarm node, start-first deadlocks -- the new task cannot
@@ -13,7 +13,7 @@
 #   * key-only SSH from JEEB_SSH_PRIVATE_KEY (fail-closed, no password in YAML).
 #   * secrets injected via printf %q over SSH stdin + a 0600 env-file; never inline,
 #     never positional (which mangled the DSN to "-" in the first pilot run).
-#   * SHA-tagged immutable image; HTTP health gate with auto-rollback.
+#   * SHA-tagged immutable image; HTTP health gate with failed-state retention.
 # Required secrets: JEEB_SSH_PRIVATE_KEY (+ this service's datastore secret).
 name: Deploy to Jeeb
 "on":
@@ -73,13 +73,13 @@ jobs:
           chmod 600 ~/.ssh/config
       - name: Remote GHCR login (token via stdin pipe)
         run: printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh jeeb "docker login ${{ inputs.registry }} -u ${{ github.actor }} --password-stdin"
-      - name: Capture current image as rollback target
+      - name: Capture current image as deployment evidence
         id: prev
         run: |
           PREV=$(ssh jeeb "docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' '${{ inputs.service_name }}' 2>/dev/null" 2>/dev/null | head -n1 | tr -d '\r' || true)
           case "$PREV" in ghcr.io/*) : ;; *) PREV=none ;; esac
           echo "prev=$PREV" >> "$GITHUB_OUTPUT"
-          echo "Rollback target: $PREV"
+          echo "Incumbent image evidence: $PREV"
       - name: Zero-downtime deploy (update if exists, else create)
         env:
           TAG: ${{ steps.build.outputs.tag }}
@@ -115,13 +115,14 @@ jobs:
               --env-add "FORCE_EXPIRE_SEAM_ENABLED=true" \
               --env-add "PHX_SERVER=true" \
               --env-add "APP_ENV=production" \
-              --update-order stop-first --update-failure-action rollback \
-              --rollback-order stop-first --update-monitor 20s "$SVC"
+              --update-order stop-first --update-failure-action pause \
+              --update-monitor 20s "$SVC"
           else
             docker service create --name "$SVC" --replicas 1 \
               --network jeeb-net \
               --publish "published=$EXT,target=$INT,mode=host" \
               --with-registry-auth \
+              --update-order stop-first --update-failure-action pause \
               --env "DATABASE_URL=$DATABASE_URL" \
               --env "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
               --env "CHAT_SERVICE_URL=http://192.168.2.50:10028" \
@@ -132,9 +133,18 @@ jobs:
               --env "APP_ENV=production" \
               "$TAG"
           fi
+          expected_image=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
+          expected_digest=${expected_image##*@}
+          [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Pulled image has no immutable digest" >&2; exit 1; }
+          [ "$expected_image" = "${TAG%:*}@${expected_digest}" ] || { echo "Pulled digest belongs to an unexpected repository" >&2; exit 1; }
+          spec_image=$(docker service inspect "$SVC" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
+          [ "$spec_image" = "${TAG}@${expected_digest}" ] || { echo "Service spec image mismatch: $spec_image" >&2; exit 1; }
+          mapfile -t task_images < <(docker service ps "$SVC" --filter desired-state=running --no-trunc --format '{{.Image}}')
+          [ "${#task_images[@]}" -eq 1 ] || { echo "Expected exactly one desired running task" >&2; exit 1; }
+          [ "${task_images[0]}" = "$spec_image" ] || { echo "Running task image mismatch: ${task_images[0]}" >&2; exit 1; }
           EOF
           } | ssh jeeb bash -s
-      - name: Health gate (poll; rollback on failure)
+      - name: Health gate (fail closed)
         run: |
           ok=false
           for i in $(seq 1 40); do
@@ -143,8 +153,7 @@ jobs:
           done
           ssh jeeb "docker service ps --no-trunc '${{ inputs.service_name }}' | head -6" || true
           if [ "$ok" != true ]; then
-            echo "Health gate RED — rolling back"
-            ssh jeeb "docker service rollback '${{ inputs.service_name }}'" || true
+            echo "Health gate RED — failed state retained for diagnosis" >&2
             exit 1
           fi
           echo "Health OK on :${{ inputs.external_port }}${{ inputs.health_path }}"

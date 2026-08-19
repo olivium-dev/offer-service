@@ -1,0 +1,17 @@
+name: Fail-closed deploy policy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify fail-closed Swarm deployment contract
+        run: python3 tests/test_fail_closed_deploy_policy.py
