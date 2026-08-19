@@ -68,5 +68,28 @@ class FailClosedDeployPolicyTests(unittest.TestCase):
         self.assertNotIn('[ "$SPEC_IMAGE" = "${IMAGE_PATH}" ]', sources)
 
 
+    def test_each_reviewed_deploy_maps_tasks_to_actual_container_image_ids(self):
+        workflows = (
+            ROOT / ".github" / "workflows" / "deploy-to-jeeb.yml",
+            ROOT / ".github" / "workflows" / "jeeb-staging-deploy.yml",
+        )
+        required = (
+            "docker image inspect",
+            "{{.Id}}",
+            "{{.Status.ContainerStatus.ContainerID}}",
+            "{{.Image}}",
+        )
+        for path in workflows:
+            source = path.read_text(encoding="utf-8")
+            for marker in required:
+                self.assertIn(marker, source, f"{marker} missing from {path}")
+
+
+    def test_release_exposes_no_schema_downgrade(self):
+        source = (ROOT / "lib" / "offer_service" / "release.ex").read_text(encoding="utf-8")
+        self.assertNotIn("def rollback", source)
+        self.assertNotIn("Ecto.Migrator.run(&1, :down", source)
+
+
 if __name__ == "__main__":
     unittest.main()

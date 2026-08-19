@@ -134,14 +134,21 @@ jobs:
               "$TAG"
           fi
           expected_image=$(docker image inspect "$TAG" --format '{{index .RepoDigests 0}}')
+          expected_image_id=$(docker image inspect "$TAG" --format '{{.Id}}')
           expected_digest=${expected_image##*@}
           [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Pulled image has no immutable digest" >&2; exit 1; }
           [ "$expected_image" = "${TAG%:*}@${expected_digest}" ] || { echo "Pulled digest belongs to an unexpected repository" >&2; exit 1; }
           spec_image=$(docker service inspect "$SVC" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
           [ "$spec_image" = "${TAG}@${expected_digest}" ] || { echo "Service spec image mismatch: $spec_image" >&2; exit 1; }
-          mapfile -t task_images < <(docker service ps "$SVC" --filter desired-state=running --no-trunc --format '{{.Image}}')
-          [ "${#task_images[@]}" -eq 1 ] || { echo "Expected exactly one desired running task" >&2; exit 1; }
-          [ "${task_images[0]}" = "$spec_image" ] || { echo "Running task image mismatch: ${task_images[0]}" >&2; exit 1; }
+          mapfile -t task_ids < <(docker service ps "$SVC" --filter desired-state=running --format '{{.ID}}')
+          [ "${#task_ids[@]}" -eq 1 ] || { echo "Expected exactly one desired running task" >&2; exit 1; }
+          for task_id in "${task_ids[@]}"; do
+            [ "$(docker inspect "$task_id" --format '{{.Spec.ContainerSpec.Image}}')" = "$spec_image" ] || { echo "Running task image mismatch" >&2; exit 1; }
+            container_id=$(docker inspect "$task_id" --format '{{.Status.ContainerStatus.ContainerID}}')
+            [ -n "$container_id" ] || { echo "Running task has no container ID" >&2; exit 1; }
+            actual_image_id=$(docker inspect "$container_id" --format '{{.Image}}')
+            [ "$actual_image_id" = "$expected_image_id" ] || { echo "Running container image ID mismatch" >&2; exit 1; }
+          done
           EOF
           } | ssh jeeb bash -s
       - name: Health gate (fail closed)

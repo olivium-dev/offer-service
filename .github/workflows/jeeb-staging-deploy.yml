@@ -244,11 +244,17 @@ jobs:
               --with-registry-auth "${mount_args[@]}" "${create_env[@]}" \
               "${common[@]}" "$IMAGE"
           fi
+          expected_image_id=$(docker image inspect "$IMAGE" --format '{{.Id}}')
           spec_image=$(docker service inspect "$service" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
           [ "$spec_image" = "$IMAGE" ] || { echo "Service spec image mismatch: $spec_image" >&2; exit 1; }
-          mapfile -t task_images < <(docker service ps "$service" --filter desired-state=running --no-trunc --format '{{.Image}}')
-          [ "${#task_images[@]}" -eq 1 ] || { echo "Expected exactly one desired running task" >&2; exit 1; }
-          [ "${task_images[0]}" = "$IMAGE" ] || { echo "Running task image mismatch: ${task_images[0]}" >&2; exit 1; }
+          mapfile -t task_ids < <(docker service ps "$service" --filter desired-state=running --format '{{.ID}}')
+          [ "${#task_ids[@]}" -eq 1 ] || { echo "Expected exactly one desired running task" >&2; exit 1; }
+          for task_id in "${task_ids[@]}"; do
+            [ "$(docker inspect "$task_id" --format '{{.Spec.ContainerSpec.Image}}')" = "$spec_image" ] || { echo "Running task image mismatch" >&2; exit 1; }
+            container_id=$(docker inspect "$task_id" --format '{{.Status.ContainerStatus.ContainerID}}')
+            [ -n "$container_id" ] || { echo "Running task has no container ID" >&2; exit 1; }
+            [ "$(docker inspect "$container_id" --format '{{.Image}}')" = "$expected_image_id" ] || { echo "Running container image ID mismatch" >&2; exit 1; }
+          done
           ports=$(docker service inspect -f '{{range .Endpoint.Spec.Ports}}{{.PublishedPort}}:{{.TargetPort}}:{{.PublishMode}}{{end}}' "$service")
           [ "$ports" = "${published}:${target}:host" ] || { echo "Unexpected ports: $ports" >&2; exit 1; }
           healthy=false
