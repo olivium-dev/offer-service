@@ -144,9 +144,6 @@ defmodule OfferService.Auction.Acceptance do
 
         {:error, reason} when is_atom(reason) ->
           {reason, %{}}
-
-        _ ->
-          {:error, %{}}
       end
 
     :telemetry.execute(

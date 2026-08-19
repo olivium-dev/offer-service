@@ -25,13 +25,13 @@ defmodule OfferService.Auction.AuditLog do
   @type action :: :submit | :edit | :withdraw | :accept | :reject | :expire
 
   @type entry :: %{
-          offer_id: Ecto.UUID.t(),
-          request_id: Ecto.UUID.t(),
-          actor_id: Ecto.UUID.t(),
-          action: action(),
-          from_state: nil | binary(),
-          to_state: binary(),
-          payload: map()
+          required(:offer_id) => Ecto.UUID.t(),
+          required(:request_id) => Ecto.UUID.t(),
+          required(:actor_id) => binary(),
+          required(:action) => action(),
+          required(:from_state) => nil | binary(),
+          required(:to_state) => binary(),
+          optional(:payload) => map()
         }
 
   @doc """
@@ -85,7 +85,7 @@ defmodule OfferService.Auction.AuditLog do
       action: Atom.to_string(entry.action),
       from_state: entry.from_state,
       to_state: entry.to_state,
-      payload: entry.payload || %{},
+      payload: Map.get(entry, :payload, %{}),
       inserted_at: DateTime.utc_now()
     }
   end
