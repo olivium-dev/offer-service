@@ -31,10 +31,13 @@ LOCK_FILE_NAMES = {
     "yarn.lock",
 }
 SELF = Path(__file__).resolve()
+ENGINE_PATTERN = (
+    r"(?:\bdocker\b|[\"']?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[\"']?)\s+"
+)
 FORBIDDEN_REVERSION_PATTERNS = (
     (
         "Docker Swarm rollback",
-        re.compile(r"\bdocker\s+service\s+rollback\b", re.IGNORECASE),
+        re.compile(ENGINE_PATTERN + r"service\s+rollback\b", re.IGNORECASE),
     ),
     (
         "Docker Swarm automatic rollback",
@@ -82,6 +85,13 @@ FORBIDDEN_REVERSION_PATTERNS = (
         re.compile(r"\bpg_restore\s+(?!--list\b)", re.IGNORECASE),
     ),
 )
+SERVICE_MUTATION_PATTERN = re.compile(
+    ENGINE_PATTERN
+    + r"(?:service\s+(?:update|create|scale|"
+    + "rm|rollback"
+    + r")|stack\s+(?:deploy|rm))\b",
+    re.IGNORECASE,
+)
 
 
 def tracked_utf8_sources():
@@ -128,9 +138,58 @@ def deployment_sources():
                 yield path, path.read_text(encoding="utf-8")
 
 
+def normalized(source):
+    return re.sub(r"\\[ \t]*\r?\n[ \t]*", " ", source)
+
+
 class FailClosedDeployPolicyTests(unittest.TestCase):
+    def test_direct_variable_and_multiline_canaries_are_controlled(self):
+        forbidden_canaries = (
+            "docker service " + "\\  \n" + "rollback app",
+            'ENGINE=docker; "$ENGINE" service ' + "\\  \n" + "rollback app",
+            "docker service " + "rollback app",
+            'ENGINE=docker; "$ENGINE" service ' + "rollback app",
+            "docker " + "\\\n  service " + "rollback app",
+            'ENGINE=docker; "$ENGINE" ' + "\\\n  service " + "rollback app",
+        )
+        for canary in forbidden_canaries:
+            self.assertTrue(
+                any(
+                    pattern.search(normalized(canary))
+                    for _, pattern in FORBIDDEN_REVERSION_PATTERNS
+                ),
+                canary,
+            )
+        mutation_canaries = (
+            "docker service " + "\\  \n" + 'update --image "$IMAGE" app',
+            'ENGINE=docker; "$ENGINE" service ' + "\\  \n" + 'create --name app "$IMAGE"',
+            'ENGINE=docker; "$ENGINE" service update --image "$IMAGE" app',
+            "docker " + "\\\n  service " + 'update --image "$IMAGE" app',
+            'ENGINE=docker; "$ENGINE" ' + "\\\n  service " + 'update --image "$IMAGE" app',
+        )
+        for canary in mutation_canaries:
+            self.assertIsNotNone(
+                SERVICE_MUTATION_PATTERN.search(normalized(canary)), canary
+            )
+
+    def test_service_mutation_inventory_is_complete(self):
+        actual = {
+            path.as_posix()
+            for path, source in tracked_utf8_sources()
+            if (path.suffix in {".sh", ".yml", ".yaml"} or path.name == "Makefile")
+            and SERVICE_MUTATION_PATTERN.search(normalized(source))
+        }
+        self.assertEqual(
+            {
+                ".github/workflows/deploy-to-jeeb.yml",
+                ".github/workflows/jeeb-staging-deploy.yml",
+            },
+            actual,
+        )
+
     def test_every_tracked_utf8_surface_is_free_of_reversion_primitives(self):
         for path, source in tracked_utf8_sources():
+            source = normalized(source)
             for label, pattern in FORBIDDEN_REVERSION_PATTERNS:
                 self.assertIsNone(
                     pattern.search(source),
@@ -146,6 +205,7 @@ class FailClosedDeployPolicyTests(unittest.TestCase):
             "--rollback-" + "monitor",
         )
         for path, source in deployment_sources():
+            source = normalized(source)
             for primitive in forbidden:
                 self.assertNotIn(primitive, source, f"{primitive} remains in {path}")
 
