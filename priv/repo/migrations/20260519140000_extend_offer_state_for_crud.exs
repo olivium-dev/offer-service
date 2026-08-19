@@ -47,21 +47,4 @@ defmodule OfferService.Repo.Migrations.ExtendOfferStateForCrud do
     CHECK (edits_count >= 0 AND edits_count <= 2)
     """)
   end
-
-  def down do
-    execute("ALTER TABLE offers DROP CONSTRAINT offers_edits_count_in_range")
-
-    alter table(:offers) do
-      remove :withdrawn_at
-      remove :edits_count
-    end
-
-    execute("ALTER TABLE offers DROP CONSTRAINT offers_status_valid")
-
-    execute("""
-    ALTER TABLE offers
-    ADD CONSTRAINT offers_status_valid
-    CHECK (status IN ('pending', 'accepted', 'rejected', 'withdrawn'))
-    """)
-  end
 end

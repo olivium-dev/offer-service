@@ -4,6 +4,8 @@ defmodule OfferServiceWeb.OfferController do
   alias OfferService.Auction
   alias OfferService.Auction.Offer
 
+  @type action_result :: Plug.Conn.t() | {:error, term()}
+
   @doc """
   GET /api/v1/requests/:request_id/offers
 
@@ -16,7 +18,7 @@ defmodule OfferServiceWeb.OfferController do
     * 404 — request does not exist
     * 403 — caller is not the request's Client
   """
-  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec index(Plug.Conn.t(), map()) :: action_result()
   def index(conn, %{"request_id" => request_id}) do
     with {:ok, request_uuid} <- cast_uuid(request_id),
          {:ok, offers} <-
@@ -39,7 +41,7 @@ defmodule OfferServiceWeb.OfferController do
     * 409 — actor already submitted an offer for this request
     * 422 — payload fails validation
   """
-  @spec submit(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec submit(Plug.Conn.t(), map()) :: action_result()
   def submit(conn, %{"request_id" => request_id} = params) do
     with {:ok, request_uuid} <- cast_uuid(request_id),
          {:ok, offer} <-
@@ -56,7 +58,7 @@ defmodule OfferServiceWeb.OfferController do
   Re-prices / re-ETAs / re-notes an offer. Up to two times; the third call
   returns 422 `edit_limit_reached`.
   """
-  @spec edit(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec edit(Plug.Conn.t(), map()) :: action_result()
   def edit(conn, %{"request_id" => request_id, "offer_id" => offer_id} = params) do
     with {:ok, request_uuid} <- cast_uuid(request_id),
          {:ok, offer_uuid} <- cast_uuid(offer_id),
@@ -78,7 +80,7 @@ defmodule OfferServiceWeb.OfferController do
 
   Marks the offer as withdrawn. After this, accept calls on it return 410.
   """
-  @spec withdraw(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec withdraw(Plug.Conn.t(), map()) :: action_result()
   def withdraw(conn, %{"request_id" => request_id, "offer_id" => offer_id}) do
     with {:ok, request_uuid} <- cast_uuid(request_id),
          {:ok, offer_uuid} <- cast_uuid(offer_id),
@@ -107,7 +109,7 @@ defmodule OfferServiceWeb.OfferController do
   response verbatim; replays with the same key and a divergent
   payload return `422 idempotency_mismatch`.
   """
-  @spec accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec accept(Plug.Conn.t(), map()) :: action_result()
   def accept(conn, %{"request_id" => request_id, "offer_id" => offer_id} = params) do
     opts = [confirm_high_fee: truthy?(params["confirm_high_fee"])]
 
@@ -141,7 +143,7 @@ defmodule OfferServiceWeb.OfferController do
   success envelope are produced by the existing domain code — this action only
   resolves the offer and forwards the `Idempotency-Key`.
   """
-  @spec accept_by_offer(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec accept_by_offer(Plug.Conn.t(), map()) :: action_result()
   def accept_by_offer(conn, %{"offer_id" => offer_id} = params) do
     opts = [confirm_high_fee: truthy?(params["confirm_high_fee"])]
 
@@ -180,7 +182,7 @@ defmodule OfferServiceWeb.OfferController do
     * 410 — offer is terminal (`offer_withdrawn` / `offer_expired`)
     * 409 — offer already accepted/rejected, or concurrent modification
   """
-  @spec reject(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec reject(Plug.Conn.t(), map()) :: action_result()
   def reject(conn, %{"offer_id" => offer_id}) do
     with {:ok, offer_uuid} <- cast_uuid(offer_id),
          {:ok, offer} <- Auction.reject_offer(conn.assigns.current_user_id, offer_uuid) do
@@ -210,7 +212,7 @@ defmodule OfferServiceWeb.OfferController do
     * 410 — offer is already terminal (`offer_expired` / `offer_withdrawn`)
     * 409 — offer already accepted/rejected, or concurrent modification
   """
-  @spec force_expire(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec force_expire(Plug.Conn.t(), map()) :: action_result()
   def force_expire(conn, %{"offer_id" => offer_id}) do
     with {:ok, offer_uuid} <- cast_uuid(offer_id),
          {:ok, offer} <- Auction.force_expire_offer(seam_actor_id(conn), offer_uuid) do
@@ -237,10 +239,9 @@ defmodule OfferServiceWeb.OfferController do
       Plug.Conn.get_req_header(conn, "idempotency-key")
       |> Enum.find(&(is_binary(&1) and byte_size(String.trim(&1)) >= 8))
 
-    cond do
-      is_binary(header) -> {:ok, String.trim(header)}
-      true -> {:error, :idempotency_key_required}
-    end
+    if is_binary(header),
+      do: {:ok, String.trim(header)},
+      else: {:error, :idempotency_key_required}
   end
 
   # --- helpers -------------------------------------------------------------

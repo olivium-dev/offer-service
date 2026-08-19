@@ -13,7 +13,9 @@ env:
 
 jobs:
   test:
-    name: Test (Elixir ${{ env.ELIXIR_VERSION }} / OTP ${{ env.OTP_VERSION }})
+    # The job-name field cannot read the workflow-level env context. Keep this
+    # label literal so GitHub can construct the job on push as well as on PRs.
+    name: Test (Elixir 1.17.3 / OTP 27.1.2)
     runs-on: ubuntu-22.04
 
     services:

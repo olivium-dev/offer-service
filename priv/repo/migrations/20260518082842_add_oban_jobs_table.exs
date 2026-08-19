@@ -4,8 +4,4 @@ defmodule OfferService.Repo.Migrations.AddObanJobsTable do
   def up do
     Oban.Migration.up()
   end
-
-  def down do
-    Oban.Migration.down(version: 1)
-  end
 end

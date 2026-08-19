@@ -38,15 +38,4 @@ defmodule OfferService.Repo.Migrations.MakeOfferEditCapConfigurable do
     CHECK (edits_count >= 0)
     """
   end
-
-  def down do
-    execute "ALTER TABLE offers DROP CONSTRAINT IF EXISTS offers_edits_count_non_negative"
-    execute "ALTER TABLE offers DROP CONSTRAINT IF EXISTS offers_edits_count_in_range"
-
-    execute """
-    ALTER TABLE offers
-    ADD CONSTRAINT offers_edits_count_in_range
-    CHECK (edits_count >= 0 AND edits_count <= 2)
-    """
-  end
 end

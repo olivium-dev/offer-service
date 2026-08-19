@@ -19,8 +19,8 @@ defmodule OfferService.Auction do
   """
 
   alias OfferService.Auction.{
-    AcceptByOffer,
     Acceptance,
+    AcceptByOffer,
     Edit,
     Expire,
     Idempotency,

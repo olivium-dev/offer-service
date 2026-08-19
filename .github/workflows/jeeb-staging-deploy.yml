@@ -233,17 +233,28 @@ jobs:
           [ "$(docker network inspect -f '{{.Driver}}' "$network")" = overlay ]
           common=(--limit-cpu 0.75 --limit-memory 768M --reserve-cpu 0.10 --reserve-memory 64M
             --log-driver json-file --log-opt max-size=10m --log-opt max-file=3
-            --update-order stop-first --update-failure-action rollback
-            --rollback-order stop-first --update-monitor 20s)
+            --update-order stop-first
+            --update-monitor 20s)
           if docker service inspect "$service" >/dev/null 2>&1; then
-            docker service update --image "$IMAGE" --with-registry-auth \
+            docker service update --image "$IMAGE" --with-registry-auth --update-failure-action pause \
               "${update_env[@]}" "${common[@]}" "$service"
           else
-            docker service create --name "$service" --replicas 1 --network "$network" \
+            docker service create --name "$service" --replicas 1 --network "$network" --update-failure-action pause \
               --publish "published=$published,target=$target,mode=host" \
               --with-registry-auth "${mount_args[@]}" "${create_env[@]}" \
               "${common[@]}" "$IMAGE"
           fi
+          expected_image_id=$(docker image inspect "$IMAGE" --format '{{.Id}}')
+          spec_image=$(docker service inspect "$service" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
+          [ "$spec_image" = "$IMAGE" ] || { echo "Service spec image mismatch: $spec_image" >&2; exit 1; }
+          mapfile -t task_ids < <(docker service ps "$service" --filter desired-state=running --format '{{.ID}}')
+          [ "${#task_ids[@]}" -eq 1 ] || { echo "Expected exactly one desired running task" >&2; exit 1; }
+          for task_id in "${task_ids[@]}"; do
+            [ "$(docker inspect "$task_id" --format '{{.Spec.ContainerSpec.Image}}')" = "$spec_image" ] || { echo "Running task image mismatch" >&2; exit 1; }
+            container_id=$(docker inspect "$task_id" --format '{{.Status.ContainerStatus.ContainerID}}')
+            [ -n "$container_id" ] || { echo "Running task has no container ID" >&2; exit 1; }
+            [ "$(docker inspect "$container_id" --format '{{.Image}}')" = "$expected_image_id" ] || { echo "Running container image ID mismatch" >&2; exit 1; }
+          done
           ports=$(docker service inspect -f '{{range .Endpoint.Spec.Ports}}{{.PublishedPort}}:{{.TargetPort}}:{{.PublishMode}}{{end}}' "$service")
           [ "$ports" = "${published}:${target}:host" ] || { echo "Unexpected ports: $ports" >&2; exit 1; }
           healthy=false
@@ -256,15 +267,15 @@ jobs:
           done
           if [ "$healthy" != true ]; then
             docker service ps --no-trunc "$service" | head -n 8 || true
-            docker service rollback "$service" || true
+            echo "Health gate failed; failed service state retained for diagnosis" >&2
             exit 1
           fi
           if [ "$REPOSITORY" = form-builder-service ]; then
             curl -fsS --max-time 8 "http://127.0.0.1:${published}/templates" >/dev/null || {
-              docker service rollback "$service" || true; exit 1;
+              echo "Template gate failed; failed service state retained for diagnosis" >&2; exit 1;
             }
             if docker service logs "$service" 2>&1 | grep -qi 'in-memory SQLite'; then
-              docker service rollback "$service" || true
+              echo "SQLite gate failed; failed service state retained for diagnosis" >&2
               exit 1
             fi
           fi

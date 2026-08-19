@@ -24,7 +24,8 @@ defmodule OfferService.MixProject do
           applications: [runtime_tools: :permanent],
           # CRITICAL: lets runtime.exs configure Repo url/pool_size without compile-time match
           validate_compile_env: false,
-          steps: [:assemble, :tar]   # :tar produces a .tar.gz alongside the dir
+          # :tar produces a .tar.gz alongside the dir
+          steps: [:assemble, :tar]
         ]
       ]
     ]
