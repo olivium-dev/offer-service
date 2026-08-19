@@ -145,6 +145,8 @@ def normalized(source):
 class FailClosedDeployPolicyTests(unittest.TestCase):
     def test_direct_variable_and_multiline_canaries_are_controlled(self):
         forbidden_canaries = (
+            "docker service " + "\\  \n" + "rollback app",
+            'ENGINE=docker; "$ENGINE" service ' + "\\  \n" + "rollback app",
             "docker service " + "rollback app",
             'ENGINE=docker; "$ENGINE" service ' + "rollback app",
             "docker " + "\\\n  service " + "rollback app",
@@ -159,6 +161,8 @@ class FailClosedDeployPolicyTests(unittest.TestCase):
                 canary,
             )
         mutation_canaries = (
+            "docker service " + "\\  \n" + 'update --image "$IMAGE" app',
+            'ENGINE=docker; "$ENGINE" service ' + "\\  \n" + 'create --name app "$IMAGE"',
             'ENGINE=docker; "$ENGINE" service update --image "$IMAGE" app',
             "docker " + "\\\n  service " + 'update --image "$IMAGE" app',
             'ENGINE=docker; "$ENGINE" ' + "\\\n  service " + 'update --image "$IMAGE" app',
