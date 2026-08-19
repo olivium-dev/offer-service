@@ -237,10 +237,9 @@ defmodule OfferServiceWeb.OfferController do
       Plug.Conn.get_req_header(conn, "idempotency-key")
       |> Enum.find(&(is_binary(&1) and byte_size(String.trim(&1)) >= 8))
 
-    cond do
-      is_binary(header) -> {:ok, String.trim(header)}
-      true -> {:error, :idempotency_key_required}
-    end
+    if is_binary(header),
+      do: {:ok, String.trim(header)},
+      else: {:error, :idempotency_key_required}
   end
 
   # --- helpers -------------------------------------------------------------

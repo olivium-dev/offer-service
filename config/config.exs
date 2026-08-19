@@ -65,14 +65,19 @@ config :phoenix, :json_library, Jason
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [
-    :request_id,
-    :trace_id,
-    :span_id,
     :accepted_offer_id,
-    :rejected_count,
+    :body,
+    :event_id,
+    :idempotency_key,
+    :latency_ms,
+    :outcome,
     :reason,
+    :rejected_count,
+    :request_id,
+    :span_id,
     :status,
-    :body
+    :trace_id,
+    :winner_user_id
   ]
 
 import_config "#{config_env()}.exs"
