@@ -41,14 +41,4 @@ defmodule OfferService.Repo.Migrations.AddGenericOfferIdentityColumns do
     create_if_not_exists index(:offers, [:actor_id])
     create_if_not_exists index(:offers, [:parent_id])
   end
-
-  def down do
-    drop_if_exists index(:offers, [:parent_id])
-    drop_if_exists index(:offers, [:actor_id])
-
-    alter table(:offers) do
-      remove_if_exists :parent_id, :uuid
-      remove_if_exists :actor_id, :text
-    end
-  end
 end

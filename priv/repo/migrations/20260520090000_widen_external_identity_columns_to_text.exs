@@ -37,11 +37,9 @@ defmodule OfferService.Repo.Migrations.WidenExternalIdentityColumnsToText do
       text equality is the same set of matches as uuid equality for values
       that were valid uuids, and now ALSO matches opaque non-uuid subs.
     * Forward-only. The original create migrations (2026051600000{1,2},
-      20260519160000) are NOT edited. `down/0` narrows back to uuid for a clean
-      rollback **only when every stored value still parses as a uuid** — if any
-      opaque non-uuid sub has been written (the whole point of this change), the
-      down cast will fail loudly rather than silently truncate. That is the
-      correct, non-destructive rollback contract for a one-way widening.
+      20260519160000) are NOT edited. No schema-down callback is exposed because
+      narrowing these columns after opaque identities have been stored is not a
+      safe operation. Any correction must be a separately reviewed migration.
 
   Indexes on these columns (`requests.client_id`, `offers.jeeber_id`,
   `offer_events.actor_id`) are preserved automatically by `ALTER COLUMN TYPE`;
@@ -56,15 +54,5 @@ defmodule OfferService.Repo.Migrations.WidenExternalIdentityColumnsToText do
     execute "ALTER TABLE offer_events ALTER COLUMN actor_id TYPE text USING actor_id::text"
 
     execute "ALTER TABLE acceptance_idempotency_keys ALTER COLUMN client_id TYPE text USING client_id::text"
-  end
-
-  def down do
-    # Forward-only in spirit: this only succeeds if every value still parses as
-    # a uuid. If an opaque sub was stored, this raises (22P02) — by design.
-    execute "ALTER TABLE acceptance_idempotency_keys ALTER COLUMN client_id TYPE uuid USING client_id::uuid"
-
-    execute "ALTER TABLE offer_events ALTER COLUMN actor_id TYPE uuid USING actor_id::uuid"
-    execute "ALTER TABLE offers ALTER COLUMN jeeber_id TYPE uuid USING jeeber_id::uuid"
-    execute "ALTER TABLE requests ALTER COLUMN client_id TYPE uuid USING client_id::uuid"
   end
 end

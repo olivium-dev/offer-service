@@ -1,8 +1,117 @@
 from pathlib import Path
+import re
+import subprocess
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+GENERATED_OR_VENDOR_DIRS = {
+    ".dart_tool",
+    ".pytest_cache",
+    "_build",
+    "bin",
+    "build",
+    "coverage",
+    "deps",
+    "dist",
+    "htmlcov",
+    "node_modules",
+    "obj",
+    "vendor",
+}
+LOCK_FILE_NAMES = {
+    "Cargo.lock",
+    "Gemfile.lock",
+    "bun.lockb",
+    "composer.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "yarn.lock",
+}
+SELF = Path(__file__).resolve()
+FORBIDDEN_REVERSION_PATTERNS = (
+    (
+        "Docker Swarm rollback",
+        re.compile(r"\bdocker\s+service\s+rollback\b", re.IGNORECASE),
+    ),
+    (
+        "Docker Swarm automatic rollback",
+        re.compile(r"--update-failure-action\s+rollback\b", re.IGNORECASE),
+    ),
+    (
+        "Docker Swarm rollback tuning",
+        re.compile(r"--rollback-(?:order|parallelism|monitor)\b", re.IGNORECASE),
+    ),
+    ("Docker container rename swap", re.compile(r"\bdocker\s+rename\b", re.IGNORECASE)),
+    (
+        "Kubernetes rollout undo",
+        re.compile(r"\bkubectl\s+rollout\s+undo\b", re.IGNORECASE),
+    ),
+    ("Helm rollback", re.compile(r"\bhelm\s+rollback\b", re.IGNORECASE)),
+    (
+        "Git history reversion",
+        re.compile(r"\bgit\s+(?:revert|reset\s+--hard)\b", re.IGNORECASE),
+    ),
+    (
+        "Ecto migrator downgrade",
+        re.compile(r"\bEcto\.Migrator\.run\([^\n]*,?\s*:down\b"),
+    ),
+    (
+        "Ecto schema-down callback",
+        re.compile(r"(?m)^\s*def\s+down(?:\s+do|\s*,\s*do:)"),
+    ),
+    ("Oban schema downgrade", re.compile(r"\bOban\.Migration\.down\s*\(")),
+    (
+        "Entity Framework schema-down callback",
+        re.compile(r"\boverride\s+void\s+Down\s*\(", re.IGNORECASE),
+    ),
+    ("Goose schema-down section", re.compile(r"(?im)^\s*--\s*\+goose\s+Down\b")),
+    (
+        "database schema downgrade command",
+        re.compile(
+            r"\b(?:alembic\s+downgrade|flask\s+db\s+downgrade|"
+            r"rails\s+db:rollback|mix\s+ecto\.rollback|"
+            r"liquibase\s+rollback|flyway\s+undo)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "database restore operation",
+        re.compile(r"\bpg_restore\s+(?!--list\b)", re.IGNORECASE),
+    ),
+)
+
+
+def tracked_utf8_sources():
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    for raw_relative in tracked.split(b"\0"):
+        if not raw_relative:
+            continue
+        relative = Path(raw_relative.decode("utf-8"))
+        path = ROOT / relative
+        if path.resolve() == SELF:
+            continue
+        if any(part in GENERATED_OR_VENDOR_DIRS for part in relative.parts):
+            continue
+        if path.name in LOCK_FILE_NAMES or path.suffix == ".lock":
+            continue
+        data = path.read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            source = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        yield relative, source
+
+
 SOURCE_ROOTS = (
     ROOT / ".github" / "workflows",
     ROOT / ".github" / "scripts",
@@ -20,6 +129,14 @@ def deployment_sources():
 
 
 class FailClosedDeployPolicyTests(unittest.TestCase):
+    def test_every_tracked_utf8_surface_is_free_of_reversion_primitives(self):
+        for path, source in tracked_utf8_sources():
+            for label, pattern in FORBIDDEN_REVERSION_PATTERNS:
+                self.assertIsNone(
+                    pattern.search(source),
+                    f"{label} remains in {path}",
+                )
+
     def test_no_executable_rollback_primitives_remain(self):
         forbidden = (
             "docker service " + "rollback",
@@ -67,7 +184,6 @@ class FailClosedDeployPolicyTests(unittest.TestCase):
         self.assertNotIn('[ "$spec_image" = "$TAG" ]', sources)
         self.assertNotIn('[ "$SPEC_IMAGE" = "${IMAGE_PATH}" ]', sources)
 
-
     def test_each_reviewed_deploy_maps_tasks_to_actual_container_image_ids(self):
         workflows = (
             ROOT / ".github" / "workflows" / "deploy-to-jeeb.yml",
@@ -84,9 +200,10 @@ class FailClosedDeployPolicyTests(unittest.TestCase):
             for marker in required:
                 self.assertIn(marker, source, f"{marker} missing from {path}")
 
-
     def test_release_exposes_no_schema_downgrade(self):
-        source = (ROOT / "lib" / "offer_service" / "release.ex").read_text(encoding="utf-8")
+        source = (ROOT / "lib" / "offer_service" / "release.ex").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("def rollback", source)
         self.assertNotIn("Ecto.Migrator.run(&1, :down", source)
 
