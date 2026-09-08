@@ -20,6 +20,7 @@ defmodule OfferService.Auction do
 
   alias OfferService.Auction.{
     Acceptance,
+    AcceptanceCompensation,
     AcceptByOffer,
     Edit,
     Expire,
@@ -126,4 +127,30 @@ defmodule OfferService.Auction do
               ),
               to: AcceptByOffer,
               as: :run
+
+  @doc """
+  Atomically undo one exact accepted-auction generation when the gateway cannot
+  commit its canonical delivery assignment. The opaque `acceptance_token` is
+  returned with the original accept response and prevents a delayed rollback
+  from reopening a later re-accept that reused the same Idempotency-Key.
+  """
+  defdelegate compensate_accepted_offer(
+                actor_id,
+                request_id,
+                offer_id,
+                accept_idempotency_key,
+                acceptance_token
+              ),
+              to: AcceptanceCompensation,
+              as: :run
+
+  @doc false
+  defdelegate acceptance_compensation_token(
+                actor_id,
+                request_id,
+                offer_id,
+                idempotency_key
+              ),
+              to: Idempotency,
+              as: :compensation_token
 end

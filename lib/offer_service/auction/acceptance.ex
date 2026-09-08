@@ -245,15 +245,26 @@ defmodule OfferService.Auction.Acceptance do
   defp reject_siblings(repo, request_id, accepted_offer_id) do
     now = now()
 
-    {count, rejected} =
-      repo.update_all(
-        from(o in Offer,
+    # PostgreSQL RETURNING exposes the values after UPDATE, so selecting
+    # `status` in update_all/3 records "rejected" rather than the state that
+    # compensation must restore. Lock and snapshot the eligible siblings
+    # first, then update those exact rows while the locks are held.
+    rejected =
+      repo.all(
+        from o in Offer,
           where:
             o.request_id == ^request_id and
               o.id != ^accepted_offer_id and
               o.status in ["pending", "submitted", "edited"],
-          select: %{id: o.id, actor_id: o.actor_id, status: o.status}
-        ),
+          select: %{id: o.id, actor_id: o.actor_id, status: o.status},
+          lock: "FOR UPDATE"
+      )
+
+    rejected_ids = Enum.map(rejected, & &1.id)
+
+    {count, _} =
+      repo.update_all(
+        from(o in Offer, where: o.id in ^rejected_ids),
         set: [status: "rejected", rejected_at: now, updated_at: now],
         inc: [lock_version: 1]
       )

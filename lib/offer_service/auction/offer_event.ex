@@ -18,7 +18,7 @@ defmodule OfferService.Auction.OfferEvent do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @actions ~w(submit edit withdraw accept reject expire)
+  @actions ~w(submit edit withdraw accept reject expire accept_compensated)
 
   schema "offer_events" do
     # External opaque identity — the acting user's gateway-forwarded JWT `sub`

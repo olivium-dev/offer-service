@@ -81,6 +81,42 @@ defmodule OfferServiceWeb.FallbackController do
         "The same Idempotency-Key was reused with a divergent payload"
       )
 
+  def call(conn, {:error, :accept_idempotency_key_required}),
+    do:
+      render_error(
+        conn,
+        400,
+        "accept_idempotency_key_required",
+        "accept_idempotency_key is required and must be at least 8 chars"
+      )
+
+  def call(conn, {:error, :acceptance_token_required}),
+    do:
+      render_error(
+        conn,
+        400,
+        "acceptance_token_required",
+        "acceptance_token is required and must be a UUID"
+      )
+
+  def call(conn, {:error, :accept_not_compensable}),
+    do:
+      render_error(
+        conn,
+        409,
+        "accept_not_compensable",
+        "The referenced acceptance generation cannot be compensated"
+      )
+
+  def call(conn, {:error, :accept_not_current}),
+    do:
+      render_error(
+        conn,
+        409,
+        "accept_not_current",
+        "The referenced acceptance is no longer the current request state"
+      )
+
   def call(conn, {:error, :already_submitted}),
     do:
       render_error(

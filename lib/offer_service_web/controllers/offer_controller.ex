@@ -124,11 +124,51 @@ defmodule OfferServiceWeb.OfferController do
              offer_uuid,
              opts,
              &serialize_accept/1
+           ),
+         {:ok, acceptance_token} <-
+           Auction.acceptance_compensation_token(
+             conn.assigns.current_user_id,
+             request_uuid,
+             offer_uuid,
+             idem_key
+           ) do
+      conn
+      |> put_resp_header("x-idempotency-replay", to_string(mode == :replay))
+      |> put_resp_header("x-offer-acceptance-token", acceptance_token)
+      |> put_status(:ok)
+      |> json(body)
+    end
+  end
+
+  @doc """
+  POST /api/v1/requests/:request_id/offers/:offer_id/accept/compensate
+
+  Compensates an accepted auction only when the gateway could not commit the
+  matching canonical delivery assignment. The body must carry both the original
+  `accept_idempotency_key` and the opaque `acceptance_token` returned by the
+  corresponding accept response. The pair identifies one exact acceptance
+  generation, so a delayed retry cannot reopen a later re-accept.
+
+  Returns 200 `{status: "compensated"}` on the first restore, or 200 with
+  `x-idempotency-replay: true` when that exact generation was already restored.
+  """
+  @spec compensate_accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def compensate_accept(conn, %{"request_id" => request_id, "offer_id" => offer_id} = params) do
+    with {:ok, request_uuid} <- cast_uuid(request_id),
+         {:ok, offer_uuid} <- cast_uuid(offer_id),
+         {:ok, accept_key, acceptance_token} <- fetch_compensation_identity(params),
+         {:ok, mode} <-
+           Auction.compensate_accepted_offer(
+             conn.assigns.current_user_id,
+             request_uuid,
+             offer_uuid,
+             accept_key,
+             acceptance_token
            ) do
       conn
       |> put_resp_header("x-idempotency-replay", to_string(mode == :replay))
       |> put_status(:ok)
-      |> json(body)
+      |> json(%{status: if(mode == :replay, do: "already_compensated", else: "compensated")})
     end
   end
 
@@ -242,6 +282,25 @@ defmodule OfferServiceWeb.OfferController do
     if is_binary(header),
       do: {:ok, String.trim(header)},
       else: {:error, :idempotency_key_required}
+  end
+
+  defp fetch_compensation_identity(params) do
+    accept_key = params["accept_idempotency_key"]
+    token = params["acceptance_token"]
+
+    cond do
+      not is_binary(accept_key) or byte_size(String.trim(accept_key)) < 8 ->
+        {:error, :accept_idempotency_key_required}
+
+      not is_binary(token) ->
+        {:error, :acceptance_token_required}
+
+      true ->
+        case Ecto.UUID.cast(String.trim(token)) do
+          {:ok, uuid} -> {:ok, String.trim(accept_key), uuid}
+          :error -> {:error, :acceptance_token_required}
+        end
+    end
   end
 
   # --- helpers -------------------------------------------------------------
