@@ -36,22 +36,4 @@ defmodule OfferService.Repo.Migrations.AddAcceptanceCompensationToken do
     CHECK (action IN ('submit','edit','withdraw','accept','reject','expire','accept_compensated'))
     """
   end
-
-  def down do
-    execute "ALTER TABLE offer_events DROP CONSTRAINT IF EXISTS offer_events_action_valid"
-
-    execute """
-    ALTER TABLE offer_events
-    ADD CONSTRAINT offer_events_action_valid
-    CHECK (action IN ('submit','edit','withdraw','accept','reject','expire'))
-    """
-
-    drop index(:acceptance_idempotency_keys, [:compensation_token],
-           name: :acceptance_compensation_token_uniq
-         )
-
-    alter table(:acceptance_idempotency_keys) do
-      remove :compensation_token
-    end
-  end
 end
