@@ -104,6 +104,24 @@ defmodule OfferService.Auction.Idempotency do
     end
   end
 
+  @doc false
+  @spec compensation_token(actor_id(), request_id(), offer_id(), idem_key()) ::
+          {:ok, Ecto.UUID.t()} | {:error, :accept_not_compensable}
+  def compensation_token(actor_id, request_id, offer_id, idempotency_key)
+      when is_binary(actor_id) and is_binary(request_id) and is_binary(offer_id) and
+             is_binary(idempotency_key) do
+    case Repo.one(
+           from k in AcceptanceIdempotencyKey,
+             where:
+               k.client_id == ^actor_id and k.request_id == ^request_id and
+                 k.offer_id == ^offer_id and k.idempotency_key == ^idempotency_key and
+                 k.status == "succeeded"
+         ) do
+      %AcceptanceIdempotencyKey{compensation_token: token} when is_binary(token) -> {:ok, token}
+      _ -> {:error, :accept_not_compensable}
+    end
+  end
+
   # --- internal ------------------------------------------------------------
 
   defp fresh_run(

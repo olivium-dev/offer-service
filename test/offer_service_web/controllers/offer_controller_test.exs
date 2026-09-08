@@ -27,6 +27,46 @@ defmodule OfferServiceWeb.OfferControllerTest do
       refute Map.has_key?(body, "chat_thread_id")
       assert accepted_id == offer.id
       assert ["false"] = Plug.Conn.get_resp_header(conn, "x-idempotency-replay")
+      assert [token] = Plug.Conn.get_resp_header(conn, "x-offer-acceptance-token")
+      assert {:ok, _} = Ecto.UUID.cast(token)
+    end
+
+    test "canonical-assignment refusal compensation reopens the exact accepted generation", %{
+      conn: conn
+    } do
+      request = insert_request!()
+      winner = insert_submitted_offer!(request)
+      sibling = insert_submitted_offer!(request)
+      accept_key = "idem-compensate-" <> Ecto.UUID.generate()
+
+      accepted =
+        conn
+        |> put_req_header("x-user-id", request.client_id)
+        |> put_req_header("idempotency-key", accept_key)
+        |> post("/api/v1/requests/#{request.id}/offers/#{winner.id}/accept", %{
+          confirm_high_fee: true
+        })
+
+      assert json_response(accepted, 200)["request"]["status"] == "accepted"
+      assert [token] = Plug.Conn.get_resp_header(accepted, "x-offer-acceptance-token")
+
+      compensated =
+        Phoenix.ConnTest.build_conn()
+        |> put_req_header("x-user-id", request.client_id)
+        |> post(
+          "/api/v1/requests/#{request.id}/offers/#{winner.id}/accept/compensate",
+          %{accept_idempotency_key: accept_key, acceptance_token: token}
+        )
+
+      assert json_response(compensated, 200)["status"] == "compensated"
+      assert ["false"] = Plug.Conn.get_resp_header(compensated, "x-idempotency-replay")
+
+      # The service-level test covers every DB field; this HTTP-level regression
+      # proves the token returned by accept is sufficient to make that atomic
+      # restore reachable by the gateway.
+      assert OfferService.Repo.get!(OfferService.Auction.Request, request.id).status == "open"
+      assert OfferService.Repo.get!(OfferService.Auction.Offer, winner.id).status == "submitted"
+      assert OfferService.Repo.get!(OfferService.Auction.Offer, sibling.id).status == "submitted"
     end
 
     test "401 when x-user-id header is missing", %{conn: conn} do

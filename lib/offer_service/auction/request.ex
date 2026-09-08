@@ -57,4 +57,13 @@ defmodule OfferService.Auction.Request do
     |> validate_inclusion(:status, ~w(open accepted cancelled expired))
     |> optimistic_lock(:lock_version)
   end
+
+  @doc false
+  @spec reopen_after_compensation_changeset(t()) :: Ecto.Changeset.t()
+  def reopen_after_compensation_changeset(%__MODULE__{} = request) do
+    request
+    |> change(status: "open", accepted_offer_id: nil)
+    |> validate_inclusion(:status, ~w(open accepted cancelled expired))
+    |> optimistic_lock(:lock_version)
+  end
 end

@@ -33,6 +33,11 @@ defmodule OfferService.Auction.AcceptanceIdempotencyKey do
     field :request_fingerprint, :string
     field :response, :map
     field :status, :string, default: "succeeded"
+    # Opaque per-success generation used by the gateway's compensating action.
+    # It is deliberately distinct from Idempotency-Key: after a compensated
+    # accept the client may re-use its stable accept key, but a delayed old
+    # compensation must never undo that newer acceptance.
+    field :compensation_token, :binary_id
 
     belongs_to :request, Request
     belongs_to :offer, Offer
@@ -51,19 +56,28 @@ defmodule OfferService.Auction.AcceptanceIdempotencyKey do
       :offer_id,
       :request_fingerprint,
       :response,
-      :status
+      :status,
+      :compensation_token
     ])
+    |> put_change(:compensation_token, compensation_token(attrs))
     |> validate_required([
       :idempotency_key,
       :client_id,
       :request_id,
       :request_fingerprint,
-      :response
+      :response,
+      :compensation_token
     ])
     |> validate_length(:idempotency_key, min: 8, max: 128)
     |> validate_inclusion(:status, ~w(succeeded failed))
     |> unique_constraint([:client_id, :request_id, :idempotency_key],
       name: :acceptance_idem_uniq
     )
+  end
+
+  defp compensation_token(attrs) do
+    Map.get(attrs, :compensation_token) ||
+      Map.get(attrs, "compensation_token") ||
+      Ecto.UUID.generate()
   end
 end

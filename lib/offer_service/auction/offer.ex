@@ -125,6 +125,22 @@ defmodule OfferService.Auction.Offer do
     |> optimistic_lock(:lock_version)
   end
 
+  @doc false
+  @spec restore_from_acceptance_changeset(t(), binary()) :: Ecto.Changeset.t()
+  def restore_from_acceptance_changeset(%__MODULE__{} = offer, prior_status)
+      when prior_status in ["pending", "submitted", "edited"] do
+    offer
+    |> change(status: prior_status, accepted_at: nil, rejected_at: nil)
+    |> validate_inclusion(:status, ["pending", "submitted", "edited"])
+    |> optimistic_lock(:lock_version)
+  end
+
+  def restore_from_acceptance_changeset(%__MODULE__{} = offer, prior_status) do
+    offer
+    |> change(status: prior_status)
+    |> validate_inclusion(:status, ["pending", "submitted", "edited"])
+  end
+
   # Dual-write the deprecated legacy alias (so old readers keep working) and the
   # generic parent reference from the canonical columns. New code only reads
   # `actor_id`/`parent_id`.

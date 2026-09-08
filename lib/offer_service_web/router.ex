@@ -38,6 +38,12 @@ defmodule OfferServiceWeb.Router do
     post "/requests/:request_id/offers", OfferController, :submit
     put "/requests/:request_id/offers/:offer_id", OfferController, :edit
     delete "/requests/:request_id/offers/:offer_id", OfferController, :withdraw
+    # Gateway-only compensation for a delivery-service canonical-assignment
+    # refusal. Static suffix is registered before /accept for unambiguous match.
+    post "/requests/:request_id/offers/:offer_id/accept/compensate",
+         OfferController,
+         :compensate_accept
+
     post "/requests/:request_id/offers/:offer_id/accept", OfferController, :accept
 
     # S07 / OS-4: offer-scoped accept for the gateway's POST /offers/{id}/accept.
