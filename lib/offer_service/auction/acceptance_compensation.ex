@@ -34,24 +34,30 @@ defmodule OfferService.Auction.AcceptanceCompensation do
   def run(actor_id, request_id, offer_id, accept_idempotency_key, acceptance_token)
       when is_binary(actor_id) and is_binary(request_id) and is_binary(offer_id) and
              is_binary(accept_idempotency_key) and is_binary(acceptance_token) do
-    case Repo.transaction(fn ->
-           case compensate(
-                  actor_id,
-                  request_id,
-                  offer_id,
-                  accept_idempotency_key,
-                  acceptance_token
-                ) do
-             {:ok, _} = ok -> ok
-             {:error, reason} -> Repo.rollback(reason)
-           end
-         end) do
+    transaction = fn ->
+      compensate_or_rollback(
+        actor_id,
+        request_id,
+        offer_id,
+        accept_idempotency_key,
+        acceptance_token
+      )
+    end
+
+    case Repo.transaction(transaction) do
       {:ok, result} -> result
       {:error, reason} when is_atom(reason) -> {:error, reason}
       {:error, _reason} -> {:error, :concurrent_modification}
     end
   rescue
     Ecto.StaleEntryError -> {:error, :concurrent_modification}
+  end
+
+  defp compensate_or_rollback(actor_id, request_id, offer_id, accept_key, token) do
+    case compensate(actor_id, request_id, offer_id, accept_key, token) do
+      {:ok, _} = ok -> ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   defp compensate(actor_id, request_id, offer_id, accept_key, token) do
@@ -192,22 +198,26 @@ defmodule OfferService.Auction.AcceptanceCompensation do
 
   defp restore_siblings(events) do
     Enum.reduce_while(events, {:ok, []}, fn event, {:ok, restored} ->
-      case Repo.one(from o in Offer, where: o.id == ^event.offer_id, lock: "FOR UPDATE") do
-        %Offer{status: "rejected"} = offer ->
-          case restore_offer(offer, event.from_state) do
-            {:ok, restored_offer} -> {:cont, {:ok, [restored_offer | restored]}}
-            {:error, reason} -> {:halt, {:error, reason}}
-          end
-
-        _ ->
-          # A sibling changed after acceptance. Do not overwrite somebody
-          # else's mutation just to force a rollback.
-          {:halt, {:error, :accept_not_current}}
+      case restore_sibling(event) do
+        {:ok, restored_offer} -> {:cont, {:ok, [restored_offer | restored]}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> case do
       {:ok, restored} -> {:ok, Enum.reverse(restored)}
       {:error, _} = error -> error
+    end
+  end
+
+  defp restore_sibling(event) do
+    case Repo.one(from o in Offer, where: o.id == ^event.offer_id, lock: "FOR UPDATE") do
+      %Offer{status: "rejected"} = offer ->
+        restore_offer(offer, event.from_state)
+
+      _ ->
+        # A sibling changed after acceptance. Do not overwrite somebody
+        # else's mutation just to force a rollback.
+        {:error, :accept_not_current}
     end
   end
 
