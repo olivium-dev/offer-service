@@ -28,6 +28,38 @@ defmodule OfferService.Auction.AcceptanceCompensationTest do
     token
   end
 
+  test "database default preserves inserts from the previous application release" do
+    request = insert_request!()
+    record_id = Ecto.UUID.generate()
+    idempotency_key = key()
+
+    # Mirrors the column list written by the release immediately before the
+    # compensation-token change. Deliberately omit compensation_token: a safe
+    # binary rollback must still be able to accept new offers after migration.
+    result =
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        INSERT INTO acceptance_idempotency_keys
+          (id, idempotency_key, client_id, request_id, request_fingerprint,
+           response, status, inserted_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 'succeeded', NOW(), NOW())
+        RETURNING compensation_token
+        """,
+        [
+          Ecto.UUID.dump!(record_id),
+          idempotency_key,
+          request.client_id,
+          Ecto.UUID.dump!(request.id),
+          "previous-release-fingerprint",
+          %{accepted_offer_id: nil}
+        ]
+      )
+
+    assert [[compensation_token]] = result.rows
+    assert {:ok, _uuid} = Ecto.UUID.cast(compensation_token)
+  end
+
   test "restores the exact accepted auction, removes its idempotency generation, and is replay-safe" do
     request = insert_request!()
     target = insert_submitted_offer!(request)
