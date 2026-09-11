@@ -14,7 +14,7 @@ defmodule OfferServiceWeb.FallbackController do
       render_error(
         conn,
         409,
-        "conflict",
+        "request_not_open",
         "Request is no longer accepting offers (state != open)"
       )
 
@@ -122,7 +122,7 @@ defmodule OfferServiceWeb.FallbackController do
       render_error(
         conn,
         409,
-        "conflict",
+        "already_submitted",
         "An offer for this request already exists for the current user"
       )
 

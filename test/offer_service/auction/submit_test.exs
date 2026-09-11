@@ -80,6 +80,19 @@ defmodule OfferService.Auction.SubmitTest do
                Auction.submit_offer(uuid(), request.id, %{fee_cents: 1_000, eta_minutes: 10})
     end
 
+    test "keeps duplicate and closed-request conflicts as distinct domain errors" do
+      open_request = insert_request!()
+      closed_request = insert_request!(%{status: "cancelled"})
+      jeeber = uuid()
+      attrs = %{fee_cents: 1_000, eta_minutes: 10}
+
+      assert {:ok, _offer} = Auction.submit_offer(jeeber, open_request.id, attrs)
+      assert {:error, :already_submitted} = Auction.submit_offer(jeeber, open_request.id, attrs)
+
+      assert {:error, :request_not_open} =
+               Auction.submit_offer(jeeber, closed_request.id, attrs)
+    end
+
     test "emits [:offer, :transition] telemetry (AC5)" do
       ref = make_ref()
       test_pid = self()
