@@ -81,7 +81,7 @@ defmodule OfferServiceWeb.OfferCrudControllerTest do
       assert body["error"]["code"] == "validation_failed"
     end
 
-    test "409 when same jeeber tries to submit twice", %{conn: conn} do
+    test "409 already_submitted when same jeeber tries to submit twice", %{conn: conn} do
       request = insert_request!()
       jeeber = uuid()
 
@@ -102,7 +102,31 @@ defmodule OfferServiceWeb.OfferCrudControllerTest do
           "eta_minutes" => 12
         })
 
-      assert json_response(conn2, 409)["error"]["code"] == "conflict"
+      assert %{
+               "error" => %{
+                 "code" => "already_submitted",
+                 "message" => "An offer for this request already exists for the current user"
+               }
+             } = json_response(conn2, 409)
+    end
+
+    test "409 request_not_open when the request no longer accepts offers", %{conn: conn} do
+      request = insert_request!(%{status: "accepted"})
+
+      conn =
+        conn
+        |> put_req_header("x-user-id", uuid())
+        |> post("/api/v1/requests/#{request.id}/offers", %{
+          "fee_cents" => 1_500,
+          "eta_minutes" => 25
+        })
+
+      assert %{
+               "error" => %{
+                 "code" => "request_not_open",
+                 "message" => "Request is no longer accepting offers (state != open)"
+               }
+             } = json_response(conn, 409)
     end
   end
 
